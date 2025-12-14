@@ -48,10 +48,23 @@ class PriorityScheduler(BaseScheduler):
         if self.is_simulation_complete():
             return True
         
+        if self.in_context_switch:
+            self.context_switch_remaining -= 1
+            if self.context_switch_remaining == 0:
+                self.in_context_switch = False
+                self.running_process = self.context_switch_target
+                self.context_switch_target = None
+                if self.running_process:
+                    self.running_process.state = ProcessState.RUNNING
+                    self.log_event(f"P{self.running_process.pid} → Running")
+                    self.execution_start = self.current_time
+            self.current_time += 1
+            return False
+        
         self.handle_process_arrival()
         self.handle_io_completion()
         
-        if self.check_preemption():
+        if self.running_process and self.check_preemption():
             if self.execution_start is not None:
                 self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
                                        self.current_time, ProcessState.RUNNING)
@@ -67,8 +80,27 @@ class PriorityScheduler(BaseScheduler):
             next_process = self.select_next_process()
             if next_process:
                 self.ready_queue.remove(next_process)
-                self.context_switch(next_process)
-                self.execution_start = self.current_time
+                
+                from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                if self.previous_process is not None and self.previous_process.pid != next_process.pid and CONTEXT_SWITCH_OVERHEAD > 0:
+                    self.stats.context_switches += 1
+                    self.log_event(f"Context Switch: P{self.previous_process.pid} → P{next_process.pid}")
+                    self.add_to_gantt_chart(-2, self.current_time,
+                                          self.current_time + CONTEXT_SWITCH_OVERHEAD,
+                                          ProcessState.CONTEXT_SWITCHING)
+                    self.in_context_switch = True
+                    self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
+                    self.context_switch_target = next_process
+                    self.previous_process = next_process
+                    self.current_time += 1
+                    return False
+                else:
+                    self.running_process = next_process
+                    self.running_process.state = ProcessState.RUNNING
+                    if self.previous_process is None:
+                        self.log_event(f"P{next_process.pid} → Running")
+                    self.previous_process = next_process
+                    self.execution_start = self.current_time
         
         if self.running_process:
             process = self.running_process
@@ -225,11 +257,24 @@ class PriorityAgingScheduler(BaseScheduler):
         if self.is_simulation_complete():
             return True
         
+        if self.in_context_switch:
+            self.context_switch_remaining -= 1
+            if self.context_switch_remaining == 0:
+                self.in_context_switch = False
+                self.running_process = self.context_switch_target
+                self.context_switch_target = None
+                if self.running_process:
+                    self.running_process.state = ProcessState.RUNNING
+                    self.log_event(f"P{self.running_process.pid} → Running")
+                    self.execution_start = self.current_time
+            self.current_time += 1
+            return False
+        
         self.handle_process_arrival()
         self.handle_io_completion()
         self.apply_aging_to_ready_queue()
         
-        if self.check_preemption():
+        if self.running_process and self.check_preemption():
             if self.execution_start is not None:
                 self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
                                        self.current_time, ProcessState.RUNNING)
@@ -246,8 +291,27 @@ class PriorityAgingScheduler(BaseScheduler):
             if next_process:
                 self.ready_queue.remove(next_process)
                 next_process.reset_to_initial_priority()
-                self.context_switch(next_process)
-                self.execution_start = self.current_time
+                
+                from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                if self.previous_process is not None and self.previous_process.pid != next_process.pid and CONTEXT_SWITCH_OVERHEAD > 0:
+                    self.stats.context_switches += 1
+                    self.log_event(f"Context Switch: P{self.previous_process.pid} → P{next_process.pid}")
+                    self.add_to_gantt_chart(-2, self.current_time,
+                                          self.current_time + CONTEXT_SWITCH_OVERHEAD,
+                                          ProcessState.CONTEXT_SWITCHING)
+                    self.in_context_switch = True
+                    self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
+                    self.context_switch_target = next_process
+                    self.previous_process = next_process
+                    self.current_time += 1
+                    return False
+                else:
+                    self.running_process = next_process
+                    self.running_process.state = ProcessState.RUNNING
+                    if self.previous_process is None:
+                        self.log_event(f"P{next_process.pid} → Running")
+                    self.previous_process = next_process
+                    self.execution_start = self.current_time
         
         if self.running_process:
             process = self.running_process
@@ -425,6 +489,20 @@ class MLQScheduler(BaseScheduler):
         if self.is_simulation_complete():
             return True
         
+        if self.in_context_switch:
+            self.context_switch_remaining -= 1
+            if self.context_switch_remaining == 0:
+                self.in_context_switch = False
+                self.running_process = self.context_switch_target
+                self.context_switch_target = None
+                if self.running_process:
+                    self.running_process.state = ProcessState.RUNNING
+                    self.log_event(f"P{self.running_process.pid} → Running")
+                    self.execution_start = self.current_time
+                    self.current_time_slice = 0
+            self.current_time += 1
+            return False
+        
         self.handle_process_arrival()
         self.handle_io_completion()
         
@@ -468,7 +546,7 @@ class MLQScheduler(BaseScheduler):
                     self.current_time_slice = 0
                     break
         
-        # 프로세스 선택
+        # 프로세스 선택 및 문맥교환
         if self.running_process is None:
             next_process = self.select_next_process()
             if next_process:
@@ -476,9 +554,29 @@ class MLQScheduler(BaseScheduler):
                     if next_process in self.queues[level]:
                         self.queues[level].remove(next_process)
                         break
-                self.context_switch(next_process)
-                self.current_time_slice = 0
-                self.execution_start = self.current_time
+                
+                from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                if self.previous_process is not None and self.previous_process.pid != next_process.pid and CONTEXT_SWITCH_OVERHEAD > 0:
+                    self.stats.context_switches += 1
+                    self.log_event(f"Context Switch: P{self.previous_process.pid} → P{next_process.pid}")
+                    self.add_to_gantt_chart(-2, self.current_time,
+                                          self.current_time + CONTEXT_SWITCH_OVERHEAD,
+                                          ProcessState.CONTEXT_SWITCHING)
+                    self.in_context_switch = True
+                    self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
+                    self.context_switch_target = next_process
+                    self.previous_process = next_process
+                    self.current_time_slice = 0
+                    self.current_time += 1
+                    return False
+                else:
+                    self.running_process = next_process
+                    self.running_process.state = ProcessState.RUNNING
+                    if self.previous_process is None:
+                        self.log_event(f"P{next_process.pid} → Running")
+                    self.previous_process = next_process
+                    self.current_time_slice = 0
+                    self.execution_start = self.current_time
         
         # CPU 실행
         if self.running_process:
@@ -670,10 +768,23 @@ class RateMonotonicScheduler(BaseScheduler):
         if self.is_simulation_complete():
             return True
         
+        if self.in_context_switch:
+            self.context_switch_remaining -= 1
+            if self.context_switch_remaining == 0:
+                self.in_context_switch = False
+                self.running_process = self.context_switch_target
+                self.context_switch_target = None
+                if self.running_process:
+                    self.running_process.state = ProcessState.RUNNING
+                    self.log_event(f"P{self.running_process.pid} → Running")
+                    self.execution_start = self.current_time
+            self.current_time += 1
+            return False
+        
         self.handle_process_arrival()
         self.handle_io_completion()
         
-        if self.check_preemption():
+        if self.running_process and self.check_preemption():
             if self.execution_start is not None:
                 self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
                                        self.current_time, ProcessState.RUNNING)
@@ -689,8 +800,27 @@ class RateMonotonicScheduler(BaseScheduler):
             next_process = self.select_next_process()
             if next_process:
                 self.ready_queue.remove(next_process)
-                self.context_switch(next_process)
-                self.execution_start = self.current_time
+                
+                from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                if self.previous_process is not None and self.previous_process.pid != next_process.pid and CONTEXT_SWITCH_OVERHEAD > 0:
+                    self.stats.context_switches += 1
+                    self.log_event(f"Context Switch: P{self.previous_process.pid} → P{next_process.pid}")
+                    self.add_to_gantt_chart(-2, self.current_time,
+                                          self.current_time + CONTEXT_SWITCH_OVERHEAD,
+                                          ProcessState.CONTEXT_SWITCHING)
+                    self.in_context_switch = True
+                    self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
+                    self.context_switch_target = next_process
+                    self.previous_process = next_process
+                    self.current_time += 1
+                    return False
+                else:
+                    self.running_process = next_process
+                    self.running_process.state = ProcessState.RUNNING
+                    if self.previous_process is None:
+                        self.log_event(f"P{next_process.pid} → Running")
+                    self.previous_process = next_process
+                    self.execution_start = self.current_time
         
         if self.running_process:
             process = self.running_process
@@ -849,10 +979,23 @@ class EDFScheduler(BaseScheduler):
         if self.is_simulation_complete():
             return True
         
+        if self.in_context_switch:
+            self.context_switch_remaining -= 1
+            if self.context_switch_remaining == 0:
+                self.in_context_switch = False
+                self.running_process = self.context_switch_target
+                self.context_switch_target = None
+                if self.running_process:
+                    self.running_process.state = ProcessState.RUNNING
+                    self.log_event(f"P{self.running_process.pid} → Running")
+                    self.execution_start = self.current_time
+            self.current_time += 1
+            return False
+        
         self.handle_process_arrival()
         self.handle_io_completion()
         
-        if self.check_preemption():
+        if self.running_process and self.check_preemption():
             if self.execution_start is not None:
                 self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
                                        self.current_time, ProcessState.RUNNING)
@@ -868,8 +1011,27 @@ class EDFScheduler(BaseScheduler):
             next_process = self.select_next_process()
             if next_process:
                 self.ready_queue.remove(next_process)
-                self.context_switch(next_process)
-                self.execution_start = self.current_time
+                
+                from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                if self.previous_process is not None and self.previous_process.pid != next_process.pid and CONTEXT_SWITCH_OVERHEAD > 0:
+                    self.stats.context_switches += 1
+                    self.log_event(f"Context Switch: P{self.previous_process.pid} → P{next_process.pid}")
+                    self.add_to_gantt_chart(-2, self.current_time,
+                                          self.current_time + CONTEXT_SWITCH_OVERHEAD,
+                                          ProcessState.CONTEXT_SWITCHING)
+                    self.in_context_switch = True
+                    self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
+                    self.context_switch_target = next_process
+                    self.previous_process = next_process
+                    self.current_time += 1
+                    return False
+                else:
+                    self.running_process = next_process
+                    self.running_process.state = ProcessState.RUNNING
+                    if self.previous_process is None:
+                        self.log_event(f"P{next_process.pid} → Running")
+                    self.previous_process = next_process
+                    self.execution_start = self.current_time
         
         if self.running_process:
             process = self.running_process

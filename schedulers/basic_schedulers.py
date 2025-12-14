@@ -38,6 +38,20 @@ class FCFSScheduler(BaseScheduler):
         if self.is_simulation_complete():
             return True
         
+        # 문맥교환 중이면 오버헤드 처리
+        if self.in_context_switch:
+            self.context_switch_remaining -= 1
+            if self.context_switch_remaining == 0:
+                self.in_context_switch = False
+                self.running_process = self.context_switch_target
+                self.context_switch_target = None
+                if self.running_process:
+                    self.running_process.state = ProcessState.RUNNING
+                    self.log_event(f"P{self.running_process.pid} → Running")
+                    self.execution_start = self.current_time
+            self.current_time += 1
+            return False
+        
         # 1. 프로세스 도착 처리
         self.handle_process_arrival()
         
@@ -49,8 +63,28 @@ class FCFSScheduler(BaseScheduler):
             next_process = self.select_next_process()
             if next_process:
                 self.ready_queue.remove(next_process)
-                self.context_switch(next_process)
-                self.execution_start = self.current_time
+                
+                # 문맥교환 시작
+                from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                if self.previous_process is not None and self.previous_process.pid != next_process.pid and CONTEXT_SWITCH_OVERHEAD > 0:
+                    self.stats.context_switches += 1
+                    self.log_event(f"Context Switch: P{self.previous_process.pid} → P{next_process.pid}")
+                    self.add_to_gantt_chart(-2, self.current_time,
+                                          self.current_time + CONTEXT_SWITCH_OVERHEAD,
+                                          ProcessState.CONTEXT_SWITCHING)
+                    self.in_context_switch = True
+                    self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
+                    self.context_switch_target = next_process
+                    self.previous_process = next_process
+                    self.current_time += 1
+                    return False
+                else:
+                    self.running_process = next_process
+                    self.running_process.state = ProcessState.RUNNING
+                    if self.previous_process is None:
+                        self.log_event(f"P{next_process.pid} → Running")
+                    self.previous_process = next_process
+                    self.execution_start = self.current_time
         
         # 4. CPU 실행
         if self.running_process:
@@ -207,14 +241,28 @@ class SJFScheduler(BaseScheduler):
         if self.is_simulation_complete():
             return True
         
+        # 문맥교환 중이면 오버헤드 처리
+        if self.in_context_switch:
+            self.context_switch_remaining -= 1
+            if self.context_switch_remaining == 0:
+                self.in_context_switch = False
+                self.running_process = self.context_switch_target
+                self.context_switch_target = None
+                if self.running_process:
+                    self.running_process.state = ProcessState.RUNNING
+                    self.log_event(f"P{self.running_process.pid} → Running")
+                    self.execution_start = self.current_time
+            self.current_time += 1
+            return False
+        
         # 1. 프로세스 도착 처리
         self.handle_process_arrival()
         
         # 2. I/O 완료 처리
         self.handle_io_completion()
         
-        # 3. 선점 검사
-        if self.check_preemption():
+        # 3. 선점 검사 (실행 중인 프로세스가 있을 때만)
+        if self.running_process and self.check_preemption():
             if self.execution_start is not None:
                 self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
                                        self.current_time, ProcessState.RUNNING)
@@ -226,13 +274,33 @@ class SJFScheduler(BaseScheduler):
             self.log_event(f"P{self.running_process.pid} preempted → Ready Queue")
             self.running_process = None
         
-        # 4. 프로세스 선택
+        # 4. 프로세스 선택 및 문맥교환 시작
         if self.running_process is None:
             next_process = self.select_next_process()
             if next_process:
                 self.ready_queue.remove(next_process)
-                self.context_switch(next_process)
-                self.execution_start = self.current_time
+                
+                # 문맥교환 시작
+                from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                if self.previous_process is not None and self.previous_process.pid != next_process.pid and CONTEXT_SWITCH_OVERHEAD > 0:
+                    self.stats.context_switches += 1
+                    self.log_event(f"Context Switch: P{self.previous_process.pid} → P{next_process.pid}")
+                    self.add_to_gantt_chart(-2, self.current_time,
+                                          self.current_time + CONTEXT_SWITCH_OVERHEAD,
+                                          ProcessState.CONTEXT_SWITCHING)
+                    self.in_context_switch = True
+                    self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
+                    self.context_switch_target = next_process
+                    self.previous_process = next_process
+                    self.current_time += 1
+                    return False
+                else:
+                    self.running_process = next_process
+                    self.running_process.state = ProcessState.RUNNING
+                    if self.previous_process is None:
+                        self.log_event(f"P{next_process.pid} → Running")
+                    self.previous_process = next_process
+                    self.execution_start = self.current_time
         
         # 5. CPU 실행
         if self.running_process:
@@ -373,6 +441,21 @@ class RoundRobinScheduler(BaseScheduler):
         if self.is_simulation_complete():
             return True
         
+        # 문맥교환 중이면 오버헤드 처리
+        if self.in_context_switch:
+            self.context_switch_remaining -= 1
+            if self.context_switch_remaining == 0:
+                self.in_context_switch = False
+                self.running_process = self.context_switch_target
+                self.context_switch_target = None
+                if self.running_process:
+                    self.running_process.state = ProcessState.RUNNING
+                    self.log_event(f"P{self.running_process.pid} → Running")
+                    self.execution_start = self.current_time
+                    self.current_time_slice = 0
+            self.current_time += 1
+            return False
+        
         # 1. 프로세스 도착 처리
         self.handle_process_arrival()
         
@@ -394,14 +477,34 @@ class RoundRobinScheduler(BaseScheduler):
             self.running_process = None
             self.current_time_slice = 0
         
-        # 4. 프로세스 선택
+        # 4. 프로세스 선택 및 문맥교환 시작
         if self.running_process is None:
             next_process = self.select_next_process()
             if next_process:
                 self.ready_queue.remove(next_process)
-                self.context_switch(next_process)
-                self.current_time_slice = 0
-                self.execution_start = self.current_time
+                
+                # 문맥교환 시작
+                from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                if self.previous_process is not None and self.previous_process.pid != next_process.pid and CONTEXT_SWITCH_OVERHEAD > 0:
+                    self.stats.context_switches += 1
+                    self.log_event(f"Context Switch: P{self.previous_process.pid} → P{next_process.pid}")
+                    self.add_to_gantt_chart(-2, self.current_time,
+                                          self.current_time + CONTEXT_SWITCH_OVERHEAD,
+                                          ProcessState.CONTEXT_SWITCHING)
+                    self.in_context_switch = True
+                    self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
+                    self.context_switch_target = next_process
+                    self.previous_process = next_process
+                    self.current_time += 1
+                    return False
+                else:
+                    self.running_process = next_process
+                    self.running_process.state = ProcessState.RUNNING
+                    if self.previous_process is None:
+                        self.log_event(f"P{next_process.pid} → Running")
+                    self.previous_process = next_process
+                    self.current_time_slice = 0
+                    self.execution_start = self.current_time
         
         # 5. CPU 실행
         if self.running_process:

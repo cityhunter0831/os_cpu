@@ -140,6 +140,9 @@ class SchedulerGUI:
                                      command=self.run_simulation, style="Accent.TButton")
         self.run_button.pack(side=tk.LEFT, padx=5)
         
+        ttk.Button(control_frame, text="🎬 실시간 시뮬레이션", 
+                   command=self.open_realtime_viewer).pack(side=tk.LEFT, padx=5)
+        
         ttk.Button(control_frame, text="📊 결과 폴더 열기", command=self.open_results_folder).pack(side=tk.LEFT, padx=5)
         
         self.progress = ttk.Progressbar(control_frame, mode='indeterminate')
@@ -302,6 +305,114 @@ class SchedulerGUI:
             self.progress.stop()
             self.run_button.config(state='normal')
             
+    def open_realtime_viewer(self):
+        """실시간 시뮬레이션 뷰어 열기"""
+        if not self.processes:
+            messagebox.showwarning("경고", "먼저 프로세스를 로드하세요!")
+            return
+        
+        # 알고리즘 선택 다이얼로그
+        algo_dialog = tk.Toplevel(self.root)
+        algo_dialog.title("실시간 시뮬레이션 설정")
+        algo_dialog.geometry("450x600")
+        algo_dialog.transient(self.root)
+        algo_dialog.grab_set()
+        
+        # 알고리즘 선택 섹션
+        ttk.Label(algo_dialog, text="알고리즘 선택:", 
+                 font=("Arial", 11, "bold")).pack(pady=10)
+        
+        selected_algo = tk.StringVar()
+        
+        # 알고리즘 라디오 버튼들
+        algos = [
+            ('FCFS', 'FCFS'),
+            ('SJF', 'SJF (Preemptive)'),
+            ('Round Robin', 'Round Robin (q=4)'),
+            ('Priority (Static)', 'Priority (정적)'),
+            ('Priority with Aging', 'Priority + Aging'),
+            ('Multi-Level Queue', 'Multi-Level Queue'),
+            ('Rate Monotonic', 'Rate Monotonic (RM)'),
+            ('EDF', 'EDF')
+        ]
+        
+        algo_frame = ttk.Frame(algo_dialog)
+        algo_frame.pack(pady=5)
+        
+        for key, display_name in algos:
+            ttk.Radiobutton(algo_frame, text=display_name, 
+                           variable=selected_algo, value=key).pack(anchor=tk.W, padx=20, pady=3)
+        
+        # 기본 선택
+        selected_algo.set('FCFS')
+        
+        # 문맥교환 오버헤드 설정
+        ttk.Separator(algo_dialog, orient='horizontal').pack(fill='x', pady=15)
+        
+        ttk.Label(algo_dialog, text="문맥교환 오버헤드 설정:", 
+                 font=("Arial", 11, "bold")).pack(pady=5)
+        
+        cs_frame = ttk.Frame(algo_dialog)
+        cs_frame.pack(pady=10)
+        
+        ttk.Label(cs_frame, text="오버헤드 (시간 단위):").pack(side=tk.LEFT, padx=5)
+        
+        cs_overhead_var = tk.IntVar(value=1)
+        cs_spinbox = ttk.Spinbox(cs_frame, from_=0, to=10, width=10, 
+                                 textvariable=cs_overhead_var)
+        cs_spinbox.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(cs_frame, text="(0=없음, 1=기본)").pack(side=tk.LEFT, padx=5)
+        
+        # 설명
+        info_text = tk.Text(algo_dialog, height=4, width=50, wrap=tk.WORD)
+        info_text.pack(pady=10)
+        info_text.insert('1.0', 
+            "문맥교환 오버헤드는 프로세스가 전환될 때\n"
+            "소요되는 시간입니다.\n"
+            "0으로 설정하면 문맥교환이 즉시 발생하며,\n"
+            "1 이상으로 설정하면 Gantt 차트에 CS 블록으로 표시됩니다.")
+        info_text.config(state='disabled')
+        
+        def start_realtime():
+            algo_key = selected_algo.get()
+            cs_overhead = cs_overhead_var.get()
+            if algo_key:
+                algo_dialog.destroy()
+                self._launch_realtime_viewer(algo_key, cs_overhead)
+        
+        ttk.Button(algo_dialog, text="▶️ 시작", command=start_realtime).pack(pady=15)
+        ttk.Button(algo_dialog, text="✖ 취소", command=algo_dialog.destroy).pack()
+        
+    def _launch_realtime_viewer(self, algo_key: str, cs_overhead: int = 1):
+        """실시간 뷰어 시작"""
+        try:
+            from realtime_viewer import RealtimeSimulationViewer
+            import core.scheduler_base as scheduler_base
+            
+            # 문맥교환 오버헤드 설정
+            original_overhead = scheduler_base.CONTEXT_SWITCH_OVERHEAD
+            scheduler_base.CONTEXT_SWITCH_OVERHEAD = cs_overhead
+            
+            # 스케줄러 생성
+            algo_info = self.algorithm_map[algo_key]
+            scheduler = algo_info['class'](self.processes, **algo_info['params'])
+            
+            # 실시간 뷰어 생성 및 실행
+            viewer = RealtimeSimulationViewer(scheduler, algo_key)
+            viewer.run()
+            
+            # 원래 오버헤드로 복구
+            scheduler_base.CONTEXT_SWITCH_OVERHEAD = original_overhead
+            
+            self.log(f"실시간 시뮬레이션 시작: {algo_key} (CS 오버헤드: {cs_overhead})", "info")
+            
+        except Exception as e:
+            messagebox.showerror("오류", f"실시간 뷰어 실행 중 오류:\n{str(e)}")
+            self.log(f"오류: {str(e)}", "error")
+            import traceback
+            traceback.print_exc()
+    
     def open_results_folder(self):
         """결과 폴더 열기"""
         results_dir = "simulation_results"

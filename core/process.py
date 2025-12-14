@@ -13,6 +13,7 @@ class ProcessState(Enum):
     RUNNING = "Running"
     WAITING = "Waiting"
     TERMINATED = "Terminated"
+    CONTEXT_SWITCHING = "Context Switching"
 
 
 class Process:

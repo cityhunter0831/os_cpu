@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from enum import Enum
 from .process import Process, ProcessState
 
+# 문맥교환 오버헤드 설정 (시간 단위)
+CONTEXT_SWITCH_OVERHEAD = 1
+
 
 class InterruptType(Enum):
     """인터럽트 타입"""
@@ -83,6 +86,11 @@ class BaseScheduler:
         self.running_process: Optional[Process] = None
         self.previous_process: Optional[Process] = None  # 이전 실행 프로세스 추적
         self.terminated_processes: List[Process] = []
+        
+        # 문맥교환 추적
+        self.in_context_switch = False
+        self.context_switch_remaining = 0
+        self.context_switch_target: Optional[Process] = None
         
         # Gantt Chart 데이터
         self.gantt_chart: List[GanttEntry] = []
@@ -162,10 +170,24 @@ class BaseScheduler:
         """
         # 문맥 전환 카운팅: 실행 중인 프로세스가 변경될 때마다 카운트
         # 단, 같은 프로세스가 계속 실행되는 경우는 제외
+        needs_context_switch = False
+        
         if self.previous_process is not None and new_process is not None:
             if self.previous_process.pid != new_process.pid:
+                needs_context_switch = True
                 self.stats.context_switches += 1
                 self.log_event(f"Context Switch: P{self.previous_process.pid} → P{new_process.pid}")
+                
+                # 문맥교환 오버헤드 기록 (Gantt Chart)
+                if CONTEXT_SWITCH_OVERHEAD > 0:
+                    self.add_to_gantt_chart(
+                        -2,  # 특수 PID: 문맥교환
+                        self.current_time,
+                        self.current_time + CONTEXT_SWITCH_OVERHEAD,
+                        ProcessState.CONTEXT_SWITCHING
+                    )
+                    # 문맥교환 시간만큼 시간 증가
+                    self.current_time += CONTEXT_SWITCH_OVERHEAD
         elif self.previous_process is None and new_process is not None:
             # 첫 프로세스 시작 (문맥 전환으로 카운트하지 않음)
             pass
@@ -218,6 +240,29 @@ class BaseScheduler:
             선택된 프로세스 또는 None
         """
         raise NotImplementedError("Subclasses must implement select_next_process()")
+    
+    def is_simulation_complete(self) -> bool:
+        """시뮬레이션 완료 여부 확인"""
+        return len(self.terminated_processes) >= len(self.processes)
+    
+    def get_current_snapshot(self) -> Dict:
+        """
+        현재 시뮬레이션 상태 스냅샷 반환 (실시간 뷰어용)
+        
+        Returns:
+            현재 상태 딕셔너리
+        """
+        return {
+            'time': self.current_time,
+            'running': self.running_process,
+            'ready_queue': list(self.ready_queue),
+            'waiting_queue': list(self.waiting_queue),
+            'terminated': list(self.terminated_processes),
+            'context_switches': self.stats.context_switches,
+            'cpu_busy_time': self.stats.cpu_busy_time,
+            'latest_gantt_entry': self.gantt_chart[-1] if self.gantt_chart else None,
+            'latest_log': self.event_log[-1] if self.event_log else ""
+        }
     
     def run(self, verbose: bool = False) -> Dict:
         """

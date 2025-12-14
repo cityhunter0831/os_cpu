@@ -18,6 +18,7 @@ class FCFSScheduler(BaseScheduler):
     
     def __init__(self, processes: List[Process]):
         super().__init__([create_process_copy(p) for p in processes], "FCFS")
+        self.execution_start = None
     
     def select_next_process(self) -> Optional[Process]:
         """도착 시간이 가장 빠른 프로세스 선택"""
@@ -26,6 +27,72 @@ class FCFSScheduler(BaseScheduler):
         
         # Ready 큐의 첫 번째 프로세스 선택 (FIFO)
         return self.ready_queue[0]
+    
+    def execute_one_step(self) -> bool:
+        """
+        한 시간 단위 실행 (실시간 뷰어용)
+        
+        Returns:
+            시뮬레이션 완료 여부
+        """
+        if self.is_simulation_complete():
+            return True
+        
+        # 1. 프로세스 도착 처리
+        self.handle_process_arrival()
+        
+        # 2. I/O 완료 처리
+        self.handle_io_completion()
+        
+        # 3. 현재 실행 중인 프로세스가 없으면 새 프로세스 선택
+        if self.running_process is None:
+            next_process = self.select_next_process()
+            if next_process:
+                self.ready_queue.remove(next_process)
+                self.context_switch(next_process)
+                self.execution_start = self.current_time
+        
+        # 4. CPU 실행
+        if self.running_process:
+            process = self.running_process
+            
+            if self.execution_start is None:
+                self.execution_start = self.current_time
+            
+            # CPU 버스트 완료까지 실행
+            burst_completed = process.execute(1)
+            self.stats.cpu_busy_time += 1
+            
+            if burst_completed:
+                execution_end = self.current_time + 1
+                self.add_to_gantt_chart(process.pid, self.execution_start, 
+                                       execution_end, ProcessState.RUNNING)
+                self.execution_start = None
+                
+                process.complete_current_burst()
+                
+                if process.is_completed():
+                    # 프로세스 종료
+                    process.finish_time = self.current_time + 1
+                    self.terminate_process(process)
+                    self.running_process = None
+                elif process.is_io_burst():
+                    # I/O 작업 시작
+                    self.start_io_operation(process)
+                    self.running_process = None
+        else:
+            # CPU 유휴 상태
+            self.add_to_gantt_chart(-1, self.current_time, self.current_time + 1, 
+                                   ProcessState.READY)
+        
+        self.current_time += 1
+        
+        # 무한 루프 방지
+        if self.current_time > 10000:
+            self.log_event("WARNING: Simulation timeout")
+            return True
+        
+        return self.is_simulation_complete()
     
     def run(self, verbose: bool = False) -> Dict:
         """FCFS 스케줄링 실행"""
@@ -105,6 +172,7 @@ class SJFScheduler(BaseScheduler):
     
     def __init__(self, processes: List[Process]):
         super().__init__([create_process_copy(p) for p in processes], "SJF (Preemptive/SRTF)")
+        self.execution_start = None
     
     def select_next_process(self) -> Optional[Process]:
         """남은 CPU 시간이 가장 짧은 프로세스 선택"""
@@ -133,6 +201,74 @@ class SJFScheduler(BaseScheduler):
             return True
         
         return False
+    
+    def execute_one_step(self) -> bool:
+        """한 시간 단위 실행 (실시간 뷰어용)"""
+        if self.is_simulation_complete():
+            return True
+        
+        # 1. 프로세스 도착 처리
+        self.handle_process_arrival()
+        
+        # 2. I/O 완료 처리
+        self.handle_io_completion()
+        
+        # 3. 선점 검사
+        if self.check_preemption():
+            if self.execution_start is not None:
+                self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
+                                       self.current_time, ProcessState.RUNNING)
+                self.execution_start = None
+            
+            self.running_process.state = ProcessState.READY
+            self.running_process.last_ready_time = self.current_time
+            self.ready_queue.append(self.running_process)
+            self.log_event(f"P{self.running_process.pid} preempted → Ready Queue")
+            self.running_process = None
+        
+        # 4. 프로세스 선택
+        if self.running_process is None:
+            next_process = self.select_next_process()
+            if next_process:
+                self.ready_queue.remove(next_process)
+                self.context_switch(next_process)
+                self.execution_start = self.current_time
+        
+        # 5. CPU 실행
+        if self.running_process:
+            process = self.running_process
+            
+            if self.execution_start is None:
+                self.execution_start = self.current_time
+            
+            burst_completed = process.execute(1)
+            self.stats.cpu_busy_time += 1
+            
+            if burst_completed:
+                self.add_to_gantt_chart(process.pid, self.execution_start,
+                                       self.current_time + 1, ProcessState.RUNNING)
+                self.execution_start = None
+                
+                process.complete_current_burst()
+                
+                if process.is_completed():
+                    process.finish_time = self.current_time + 1
+                    self.terminate_process(process)
+                    self.running_process = None
+                elif process.is_io_burst():
+                    self.start_io_operation(process)
+                    self.running_process = None
+        else:
+            self.add_to_gantt_chart(-1, self.current_time, self.current_time + 1,
+                                   ProcessState.READY)
+        
+        self.current_time += 1
+        
+        if self.current_time > 10000:
+            self.log_event("WARNING: Simulation timeout")
+            return True
+        
+        return self.is_simulation_complete()
     
     def run(self, verbose: bool = False) -> Dict:
         """SJF (Preemptive) 스케줄링 실행"""
@@ -224,12 +360,86 @@ class RoundRobinScheduler(BaseScheduler):
                         f"Round Robin (q={time_slice})")
         self.time_slice = time_slice
         self.current_time_slice = 0
+        self.execution_start = None
     
     def select_next_process(self) -> Optional[Process]:
         """Ready 큐의 첫 번째 프로세스 선택 (FIFO)"""
         if not self.ready_queue:
             return None
         return self.ready_queue[0]
+    
+    def execute_one_step(self) -> bool:
+        """한 시간 단위 실행 (실시간 뷰어용)"""
+        if self.is_simulation_complete():
+            return True
+        
+        # 1. 프로세스 도착 처리
+        self.handle_process_arrival()
+        
+        # 2. I/O 완료 처리
+        self.handle_io_completion()
+        
+        # 3. 타임 슬라이스 만료 확인
+        if (self.running_process and 
+            self.current_time_slice >= self.time_slice):
+            if self.execution_start is not None:
+                self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
+                                       self.current_time, ProcessState.RUNNING)
+                self.execution_start = None
+            
+            self.log_event(f"P{self.running_process.pid} time slice expired → Ready Queue")
+            self.running_process.state = ProcessState.READY
+            self.running_process.last_ready_time = self.current_time
+            self.ready_queue.append(self.running_process)
+            self.running_process = None
+            self.current_time_slice = 0
+        
+        # 4. 프로세스 선택
+        if self.running_process is None:
+            next_process = self.select_next_process()
+            if next_process:
+                self.ready_queue.remove(next_process)
+                self.context_switch(next_process)
+                self.current_time_slice = 0
+                self.execution_start = self.current_time
+        
+        # 5. CPU 실행
+        if self.running_process:
+            process = self.running_process
+            
+            if self.execution_start is None:
+                self.execution_start = self.current_time
+            
+            burst_completed = process.execute(1)
+            self.stats.cpu_busy_time += 1
+            self.current_time_slice += 1
+            
+            if burst_completed:
+                self.add_to_gantt_chart(process.pid, self.execution_start,
+                                       self.current_time + 1, ProcessState.RUNNING)
+                self.execution_start = None
+                
+                process.complete_current_burst()
+                self.current_time_slice = 0
+                
+                if process.is_completed():
+                    process.finish_time = self.current_time + 1
+                    self.terminate_process(process)
+                    self.running_process = None
+                elif process.is_io_burst():
+                    self.start_io_operation(process)
+                    self.running_process = None
+        else:
+            self.add_to_gantt_chart(-1, self.current_time, self.current_time + 1,
+                                   ProcessState.READY)
+        
+        self.current_time += 1
+        
+        if self.current_time > 10000:
+            self.log_event("WARNING: Simulation timeout")
+            return True
+        
+        return self.is_simulation_complete()
     
     def run(self, verbose: bool = False) -> Dict:
         """Round Robin 스케줄링 실행"""

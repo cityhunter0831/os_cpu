@@ -19,6 +19,7 @@ class PriorityScheduler(BaseScheduler):
     
     def __init__(self, processes: List[Process]):
         super().__init__([create_process_copy(p) for p in processes], "Priority (Static)")
+        self.execution_start = None
     
     def select_next_process(self) -> Optional[Process]:
         """우선순위가 가장 높은 프로세스 선택"""
@@ -41,6 +42,68 @@ class PriorityScheduler(BaseScheduler):
             return True
         
         return False
+    
+    def execute_one_step(self) -> bool:
+        """한 시간 단위 실행 (실시간 뷰어용)"""
+        if self.is_simulation_complete():
+            return True
+        
+        self.handle_process_arrival()
+        self.handle_io_completion()
+        
+        if self.check_preemption():
+            if self.execution_start is not None:
+                self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
+                                       self.current_time, ProcessState.RUNNING)
+                self.execution_start = None
+            
+            self.running_process.state = ProcessState.READY
+            self.running_process.last_ready_time = self.current_time
+            self.ready_queue.append(self.running_process)
+            self.log_event(f"P{self.running_process.pid} preempted by higher priority → Ready Queue")
+            self.running_process = None
+        
+        if self.running_process is None:
+            next_process = self.select_next_process()
+            if next_process:
+                self.ready_queue.remove(next_process)
+                self.context_switch(next_process)
+                self.execution_start = self.current_time
+        
+        if self.running_process:
+            process = self.running_process
+            
+            if self.execution_start is None:
+                self.execution_start = self.current_time
+            
+            burst_completed = process.execute(1)
+            self.stats.cpu_busy_time += 1
+            
+            if burst_completed:
+                self.add_to_gantt_chart(process.pid, self.execution_start,
+                                       self.current_time + 1, ProcessState.RUNNING)
+                self.execution_start = None
+                
+                process.complete_current_burst()
+                
+                if process.is_completed():
+                    process.finish_time = self.current_time + 1
+                    self.terminate_process(process)
+                    self.running_process = None
+                elif process.is_io_burst():
+                    self.start_io_operation(process)
+                    self.running_process = None
+        else:
+            self.add_to_gantt_chart(-1, self.current_time, self.current_time + 1,
+                                   ProcessState.READY)
+        
+        self.current_time += 1
+        
+        if self.current_time > 10000:
+            self.log_event("WARNING: Simulation timeout")
+            return True
+        
+        return self.is_simulation_complete()
     
     def run(self, verbose: bool = False) -> Dict:
         """Priority 스케줄링 실행"""
@@ -129,6 +192,7 @@ class PriorityAgingScheduler(BaseScheduler):
         super().__init__([create_process_copy(p) for p in processes], 
                         f"Priority with Aging (factor={aging_factor})")
         self.aging_factor = aging_factor
+        self.execution_start = None
     
     def apply_aging_to_ready_queue(self):
         """Ready 큐의 모든 프로세스에 Aging 적용"""
@@ -155,6 +219,70 @@ class PriorityAgingScheduler(BaseScheduler):
             return True
         
         return False
+    
+    def execute_one_step(self) -> bool:
+        """한 시간 단위 실행 (실시간 뷰어용)"""
+        if self.is_simulation_complete():
+            return True
+        
+        self.handle_process_arrival()
+        self.handle_io_completion()
+        self.apply_aging_to_ready_queue()
+        
+        if self.check_preemption():
+            if self.execution_start is not None:
+                self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
+                                       self.current_time, ProcessState.RUNNING)
+                self.execution_start = None
+            
+            self.running_process.state = ProcessState.READY
+            self.running_process.last_ready_time = self.current_time
+            self.ready_queue.append(self.running_process)
+            self.log_event(f"P{self.running_process.pid} preempted → Ready Queue")
+            self.running_process = None
+        
+        if self.running_process is None:
+            next_process = self.select_next_process()
+            if next_process:
+                self.ready_queue.remove(next_process)
+                next_process.reset_to_initial_priority()
+                self.context_switch(next_process)
+                self.execution_start = self.current_time
+        
+        if self.running_process:
+            process = self.running_process
+            
+            if self.execution_start is None:
+                self.execution_start = self.current_time
+            
+            burst_completed = process.execute(1)
+            self.stats.cpu_busy_time += 1
+            
+            if burst_completed:
+                self.add_to_gantt_chart(process.pid, self.execution_start,
+                                       self.current_time + 1, ProcessState.RUNNING)
+                self.execution_start = None
+                
+                process.complete_current_burst()
+                
+                if process.is_completed():
+                    process.finish_time = self.current_time + 1
+                    self.terminate_process(process)
+                    self.running_process = None
+                elif process.is_io_burst():
+                    self.start_io_operation(process)
+                    self.running_process = None
+        else:
+            self.add_to_gantt_chart(-1, self.current_time, self.current_time + 1,
+                                   ProcessState.READY)
+        
+        self.current_time += 1
+        
+        if self.current_time > 10000:
+            self.log_event("WARNING: Simulation timeout")
+            return True
+        
+        return self.is_simulation_complete()
     
     def run(self, verbose: bool = False) -> Dict:
         """Priority with Aging 스케줄링 실행"""
@@ -253,6 +381,7 @@ class MLQScheduler(BaseScheduler):
         self.queues = [[], [], []]  # [highest, medium, lowest]
         self.time_slices = [8, 16, float('inf')]  # Queue별 타임 슬라이스
         self.current_time_slice = 0
+        self.execution_start = None
     
     def handle_process_arrival(self):
         """프로세스 도착 처리 - 모두 최상위 큐에 삽입"""
@@ -290,6 +419,104 @@ class MLQScheduler(BaseScheduler):
             if self.queues[level]:
                 return self.queues[level][0]
         return None
+    
+    def execute_one_step(self) -> bool:
+        """한 시간 단위 실행 (실시간 뷰어용)"""
+        if self.is_simulation_complete():
+            return True
+        
+        self.handle_process_arrival()
+        self.handle_io_completion()
+        
+        current_queue_level = 0
+        
+        # 타임 슬라이스 만료 확인
+        if self.running_process:
+            current_queue_level = self.running_process.queue_level
+            time_limit = self.time_slices[current_queue_level]
+            
+            if (current_queue_level < 2 and 
+                self.current_time_slice >= time_limit):
+                if self.execution_start is not None:
+                    self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
+                                           self.current_time, ProcessState.RUNNING)
+                    self.execution_start = None
+                
+                new_level = min(2, current_queue_level + 1)
+                self.running_process.queue_level = new_level
+                self.running_process.state = ProcessState.READY
+                self.running_process.last_ready_time = self.current_time
+                self.queues[new_level].append(self.running_process)
+                self.log_event(f"P{self.running_process.pid} demoted → Queue {new_level}")
+                self.running_process = None
+                self.current_time_slice = 0
+        
+        # 선점 검사
+        if self.running_process:
+            for level in range(current_queue_level):
+                if self.queues[level]:
+                    if self.execution_start is not None:
+                        self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
+                                               self.current_time, ProcessState.RUNNING)
+                        self.execution_start = None
+                    
+                    self.running_process.state = ProcessState.READY
+                    self.running_process.last_ready_time = self.current_time
+                    self.queues[current_queue_level].append(self.running_process)
+                    self.log_event(f"P{self.running_process.pid} preempted → Queue {current_queue_level}")
+                    self.running_process = None
+                    self.current_time_slice = 0
+                    break
+        
+        # 프로세스 선택
+        if self.running_process is None:
+            next_process = self.select_next_process()
+            if next_process:
+                for level in range(3):
+                    if next_process in self.queues[level]:
+                        self.queues[level].remove(next_process)
+                        break
+                self.context_switch(next_process)
+                self.current_time_slice = 0
+                self.execution_start = self.current_time
+        
+        # CPU 실행
+        if self.running_process:
+            process = self.running_process
+            
+            if self.execution_start is None:
+                self.execution_start = self.current_time
+            
+            burst_completed = process.execute(1)
+            self.stats.cpu_busy_time += 1
+            self.current_time_slice += 1
+            
+            if burst_completed:
+                self.add_to_gantt_chart(process.pid, self.execution_start,
+                                       self.current_time + 1, ProcessState.RUNNING)
+                self.execution_start = None
+                
+                process.complete_current_burst()
+                self.current_time_slice = 0
+                
+                if process.is_completed():
+                    process.finish_time = self.current_time + 1
+                    self.terminate_process(process)
+                    self.running_process = None
+                elif process.is_io_burst():
+                    self.start_io_operation(process)
+                    self.running_process = None
+        else:
+            self.add_to_gantt_chart(-1, self.current_time, self.current_time + 1,
+                                   ProcessState.READY)
+        
+        self.current_time += 1
+        
+        if self.current_time > 10000:
+            self.log_event("WARNING: Simulation timeout")
+            return True
+        
+        return self.is_simulation_complete()
     
     def run(self, verbose: bool = False) -> Dict:
         """MLQ 스케줄링 실행"""
@@ -412,6 +639,7 @@ class RateMonotonicScheduler(BaseScheduler):
         # 실시간 프로세스만 필터링
         rt_processes = [p for p in processes if p.period > 0]
         super().__init__([create_process_copy(p) for p in rt_processes], "Rate Monotonic (RM)")
+        self.execution_start = None
     
     def select_next_process(self) -> Optional[Process]:
         """주기가 가장 짧은 프로세스 선택"""
@@ -433,6 +661,71 @@ class RateMonotonicScheduler(BaseScheduler):
             return True
         
         return False
+    
+    def execute_one_step(self) -> bool:
+        """한 시간 단위 실행 (실시간 뷰어용)"""
+        if not self.processes:
+            return True
+        
+        if self.is_simulation_complete():
+            return True
+        
+        self.handle_process_arrival()
+        self.handle_io_completion()
+        
+        if self.check_preemption():
+            if self.execution_start is not None:
+                self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
+                                       self.current_time, ProcessState.RUNNING)
+                self.execution_start = None
+            
+            self.running_process.state = ProcessState.READY
+            self.running_process.last_ready_time = self.current_time
+            self.ready_queue.append(self.running_process)
+            self.log_event(f"P{self.running_process.pid} preempted by shorter period → Ready Queue")
+            self.running_process = None
+        
+        if self.running_process is None:
+            next_process = self.select_next_process()
+            if next_process:
+                self.ready_queue.remove(next_process)
+                self.context_switch(next_process)
+                self.execution_start = self.current_time
+        
+        if self.running_process:
+            process = self.running_process
+            
+            if self.execution_start is None:
+                self.execution_start = self.current_time
+            
+            burst_completed = process.execute(1)
+            self.stats.cpu_busy_time += 1
+            
+            if burst_completed:
+                self.add_to_gantt_chart(process.pid, self.execution_start,
+                                       self.current_time + 1, ProcessState.RUNNING)
+                self.execution_start = None
+                
+                process.complete_current_burst()
+                
+                if process.is_completed():
+                    process.finish_time = self.current_time + 1
+                    self.terminate_process(process)
+                    self.running_process = None
+                elif process.is_io_burst():
+                    self.start_io_operation(process)
+                    self.running_process = None
+        else:
+            self.add_to_gantt_chart(-1, self.current_time, self.current_time + 1,
+                                   ProcessState.READY)
+        
+        self.current_time += 1
+        
+        if self.current_time > 10000:
+            self.log_event("WARNING: Simulation timeout")
+            return True
+        
+        return self.is_simulation_complete()
     
     def run(self, verbose: bool = False) -> Dict:
         """Rate Monotonic 스케줄링 실행"""
@@ -525,6 +818,7 @@ class EDFScheduler(BaseScheduler):
         # 실시간 프로세스만 필터링
         rt_processes = [p for p in processes if p.deadline > 0]
         super().__init__([create_process_copy(p) for p in rt_processes], "Earliest Deadline First (EDF)")
+        self.execution_start = None
     
     def select_next_process(self) -> Optional[Process]:
         """절대 마감시한이 가장 빠른 프로세스 선택"""
@@ -546,6 +840,71 @@ class EDFScheduler(BaseScheduler):
             return True
         
         return False
+    
+    def execute_one_step(self) -> bool:
+        """한 시간 단위 실행 (실시간 뷰어용)"""
+        if not self.processes:
+            return True
+        
+        if self.is_simulation_complete():
+            return True
+        
+        self.handle_process_arrival()
+        self.handle_io_completion()
+        
+        if self.check_preemption():
+            if self.execution_start is not None:
+                self.add_to_gantt_chart(self.running_process.pid, self.execution_start,
+                                       self.current_time, ProcessState.RUNNING)
+                self.execution_start = None
+            
+            self.running_process.state = ProcessState.READY
+            self.running_process.last_ready_time = self.current_time
+            self.ready_queue.append(self.running_process)
+            self.log_event(f"P{self.running_process.pid} preempted by earlier deadline → Ready Queue")
+            self.running_process = None
+        
+        if self.running_process is None:
+            next_process = self.select_next_process()
+            if next_process:
+                self.ready_queue.remove(next_process)
+                self.context_switch(next_process)
+                self.execution_start = self.current_time
+        
+        if self.running_process:
+            process = self.running_process
+            
+            if self.execution_start is None:
+                self.execution_start = self.current_time
+            
+            burst_completed = process.execute(1)
+            self.stats.cpu_busy_time += 1
+            
+            if burst_completed:
+                self.add_to_gantt_chart(process.pid, self.execution_start,
+                                       self.current_time + 1, ProcessState.RUNNING)
+                self.execution_start = None
+                
+                process.complete_current_burst()
+                
+                if process.is_completed():
+                    process.finish_time = self.current_time + 1
+                    self.terminate_process(process)
+                    self.running_process = None
+                elif process.is_io_burst():
+                    self.start_io_operation(process)
+                    self.running_process = None
+        else:
+            self.add_to_gantt_chart(-1, self.current_time, self.current_time + 1,
+                                   ProcessState.READY)
+        
+        self.current_time += 1
+        
+        if self.current_time > 10000:
+            self.log_event("WARNING: Simulation timeout")
+            return True
+        
+        return self.is_simulation_complete()
     
     def run(self, verbose: bool = False) -> Dict:
         """EDF 스케줄링 실행"""

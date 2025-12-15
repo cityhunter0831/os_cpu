@@ -41,6 +41,7 @@ class FCFSScheduler(BaseScheduler):
         # 문맥교환 중이면 오버헤드 처리
         if self.in_context_switch:
             self.context_switch_remaining -= 1
+            self.current_time += 1
             if self.context_switch_remaining == 0:
                 self.in_context_switch = False
                 self.running_process = self.context_switch_target
@@ -49,7 +50,6 @@ class FCFSScheduler(BaseScheduler):
                     self.running_process.state = ProcessState.RUNNING
                     self.log_event(f"P{self.running_process.pid} → Running")
                     self.execution_start = self.current_time
-            self.current_time += 1
             return False
         
         # 1. 프로세스 도착 처리
@@ -76,7 +76,7 @@ class FCFSScheduler(BaseScheduler):
                     self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
                     self.context_switch_target = next_process
                     self.previous_process = next_process
-                    self.current_time += 1
+                    # 문맥교환 시작 - 다음 스텝에서 시간 처리
                     return False
                 else:
                     self.running_process = next_process
@@ -244,6 +244,7 @@ class SJFScheduler(BaseScheduler):
         # 문맥교환 중이면 오버헤드 처리
         if self.in_context_switch:
             self.context_switch_remaining -= 1
+            self.current_time += 1
             if self.context_switch_remaining == 0:
                 self.in_context_switch = False
                 self.running_process = self.context_switch_target
@@ -252,7 +253,6 @@ class SJFScheduler(BaseScheduler):
                     self.running_process.state = ProcessState.RUNNING
                     self.log_event(f"P{self.running_process.pid} → Running")
                     self.execution_start = self.current_time
-            self.current_time += 1
             return False
         
         # 1. 프로세스 도착 처리
@@ -292,7 +292,7 @@ class SJFScheduler(BaseScheduler):
                     self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
                     self.context_switch_target = next_process
                     self.previous_process = next_process
-                    self.current_time += 1
+                    # 문맥교환 시작 - 다음 스텝에서 시간 처리
                     return False
                 else:
                     self.running_process = next_process
@@ -444,6 +444,7 @@ class RoundRobinScheduler(BaseScheduler):
         # 문맥교환 중이면 오버헤드 처리
         if self.in_context_switch:
             self.context_switch_remaining -= 1
+            self.current_time += 1
             if self.context_switch_remaining == 0:
                 self.in_context_switch = False
                 self.running_process = self.context_switch_target
@@ -453,7 +454,6 @@ class RoundRobinScheduler(BaseScheduler):
                     self.log_event(f"P{self.running_process.pid} → Running")
                     self.execution_start = self.current_time
                     self.current_time_slice = 0
-            self.current_time += 1
             return False
         
         # 1. 프로세스 도착 처리
@@ -495,7 +495,7 @@ class RoundRobinScheduler(BaseScheduler):
                     self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
                     self.context_switch_target = next_process
                     self.previous_process = next_process
-                    self.current_time += 1
+                    # 문맥교환 시작 - 다음 스텝에서 시간 처리
                     return False
                 else:
                     self.running_process = next_process

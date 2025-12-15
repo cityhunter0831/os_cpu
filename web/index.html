@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CPU 스케줄러 시뮬레이터</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); min-height: 100vh; }
+        .glass { background: rgba(255,255,255,0.05); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); }
+        .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(102,126,234,0.3); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .btn-secondary { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); }
+        .btn-secondary:hover { background: rgba(255,255,255,0.15); }
+        .stat-card { background: linear-gradient(135deg, rgba(102,126,234,0.2) 0%, rgba(118,75,162,0.2) 100%); border: 1px solid rgba(102,126,234,0.3); }
+        .log-cs { background: rgba(239,68,68,0.2); color: #fca5a5; }
+        .log-event { background: rgba(34,197,94,0.2); color: #86efac; }
+        .log-process { background: rgba(168,85,247,0.2); color: #d8b4fe; }
+        .log-time { background: rgba(59,130,246,0.2); color: #93c5fd; }
+        .gantt-bar:hover { filter: brightness(1.2); }
+        .time-indicator { position: absolute; top: 0; bottom: 0; width: 2px; background: #22c55e; box-shadow: 0 0 10px #22c55e; z-index: 10; transition: left 0.3s ease; }
+        .time-indicator::before { content: ''; position: absolute; top: -8px; left: -4px; width: 10px; height: 10px; background: #22c55e; border-radius: 50%; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .time-indicator { animation: pulse 1s infinite; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+        .tab-btn { transition: all 0.2s; }
+        .tab-btn.active { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        
+        /* 라이트 모드 */
+        .light-mode { background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); color: #1a1a2e; }
+        .light-mode .glass { background: rgba(255,255,255,0.7); border-color: rgba(0,0,0,0.1); }
+        .light-mode .stat-card { background: linear-gradient(135deg, rgba(102,126,234,0.1) 0%, rgba(118,75,162,0.1) 100%); }
+        .light-mode .text-gray-200 { color: #1a1a2e; }
+        .light-mode .text-gray-400 { color: #4a5568; }
+        .light-mode .text-gray-500 { color: #718096; }
+        .light-mode .text-purple-300 { color: #6b46c1; }
+        .light-mode .bg-gray-800 { background-color: #e2e8f0; }
+        .light-mode .bg-gray-900 { background-color: #cbd5e0; }
+        .light-mode .bg-white\/5 { background-color: rgba(0,0,0,0.05); }
+        .light-mode .border-white\/10 { border-color: rgba(0,0,0,0.1); }
+        .light-mode .hover\:bg-white\/10:hover { background-color: rgba(0,0,0,0.1); }
+        .light-mode ::-webkit-scrollbar-track { background: rgba(0,0,0,0.05); }
+        .light-mode ::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); }
+    </style>
+</head>
+<body class="text-gray-200" id="app-body">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const API_URL = 'http://localhost:8000';
+        
+        const COLORS = ['#FF6B6B','#4ECDC4','#45B7D1','#FFA07A','#98D8C8','#F7DC6F','#BB8FCE','#85C1E2','#F8B739','#52B788'];
+        
+        const ALGORITHMS = [
+            {id:'FCFS', name:'FCFS (First-Come, First-Served)', preemptive:false},
+            {id:'SJF', name:'SJF (Shortest Job First)', preemptive:true},
+            {id:'RoundRobin', name:'Round Robin', preemptive:true},
+            {id:'Priority', name:'Priority (Static)', preemptive:true},
+            {id:'PriorityAging', name:'Priority with Aging', preemptive:true},
+            {id:'MLQ', name:'Multi-Level Queue', preemptive:true},
+            {id:'RateMonotonic', name:'Rate Monotonic (RM)', preemptive:true},
+            {id:'EDF', name:'Earliest Deadline First (EDF)', preemptive:true}
+        ];
+
+        // 교수님 데이터
+        const PROFESSOR_DATA = [
+            {pid:1, arrival_time:0, priority:3, execution_pattern:[15], period:0, deadline:0},
+            {pid:2, arrival_time:2, priority:2, execution_pattern:[3,10,4,12,5], period:0, deadline:0},
+            {pid:3, arrival_time:5, priority:1, execution_pattern:[8], period:0, deadline:0},
+            {pid:4, arrival_time:1, priority:5, execution_pattern:[25], period:0, deadline:0},
+            {pid:5, arrival_time:0, priority:0, execution_pattern:[4], period:10, deadline:10},
+            {pid:6, arrival_time:0, priority:0, execution_pattern:[7], period:25, deadline:25},
+            {pid:7, arrival_time:8, priority:4, execution_pattern:[6,8,6], period:0, deadline:0}
+        ];
+
+        // 랜덤 프로세스 생성
+        const generateRandomProcesses = (count = 5) => {
+            const processes = [];
+            for (let i = 1; i <= count; i++) {
+                const haIO = Math.random() > 0.5;
+                let pattern = [Math.floor(Math.random() * 15) + 3];
+                if (haIO) {
+                    pattern.push(Math.floor(Math.random() * 8) + 2);
+                    pattern.push(Math.floor(Math.random() * 10) + 2);
+                }
+                processes.push({
+                    pid: i,
+                    arrival_time: Math.floor(Math.random() * 10),
+                    priority: Math.floor(Math.random() * 5) + 1,
+                    execution_pattern: pattern,
+                    period: 0,
+                    deadline: 0
+                });
+            }
+            return processes.sort((a, b) => a.arrival_time - b.arrival_time);
+        };
+
+        // Gantt 차트 컴포넌트 (시간 표시선 포함)
+        const GanttChart = ({ganttData, processes, currentTime = null, isRealtime = false, runningPid = null}) => {
+            const chartRef = useRef(null);
+            
+            // 자동 스크롤 비활성화 - 전체 차트를 한눈에 보이게 함
+            // 스크롤이 필요하면 사용자가 직접 스크롤
+            
+            // 실시간 모드가 아니고 ganttData가 비어있으면 안내 메시지 표시
+            if (!isRealtime && (!ganttData || ganttData.length === 0)) {
+                return <div className="glass rounded-xl p-8 text-center text-gray-400">시뮬레이션을 실행하면 Gantt 차트가 표시됩니다.</div>;
+            }
+            
+            // 실시간 모드에서는 processes 기반으로 PID 목록 생성, 아니면 ganttData 기반
+            const uniquePids = isRealtime && processes && processes.length > 0
+                ? [...new Set(processes.map(p => p.pid))].sort((a,b) => a-b)
+                : [...new Set((ganttData || []).filter(g => g.pid >= 0).map(g => g.pid))].sort((a,b) => a-b);
+            
+            const safeGanttData = ganttData || [];
+            
+            // 프로세스의 총 예상 실행 시간 계산 (실시간 모드에서 전체 범위 표시용)
+            let estimatedEndTime = 30;
+            if (isRealtime && processes && processes.length > 0) {
+                const totalBurst = processes.reduce((sum, p) => {
+                    const burst = p.execution_pattern ? p.execution_pattern.reduce((a, b) => a + b, 0) : 0;
+                    return sum + burst;
+                }, 0);
+                const maxArrival = Math.max(...processes.map(p => p.arrival_time || 0));
+                estimatedEndTime = Math.max(totalBurst + maxArrival + 20, 50); // 여유 공간 추가
+            }
+            
+            const maxTime = Math.max(...safeGanttData.map(g => g.end_time || 0), currentTime || 0, estimatedEndTime);
+            const timeScale = Math.max(800 / maxTime, 12);
+            const hasCS = safeGanttData.some(g => g.pid === -2);
+            
+            const getColor = (pid) => {
+                if (pid === -1) return '#374151';
+                if (pid === -2) return '#EF4444';
+                const idx = uniquePids.indexOf(pid);
+                return COLORS[idx % COLORS.length];
+            };
+
+            const chartHeight = (uniquePids.length + (hasCS ? 1 : 0)) * 36 + 40;
+            
+            // 현재 시간에 실행 중인 바 확인
+            const isCurrentlyRunning = (entry) => {
+                if (!isRealtime || currentTime === null) return false;
+                return entry.start_time <= currentTime && entry.end_time > currentTime && entry.state !== 'Waiting';
+            };
+
+            return (
+                <div ref={chartRef} className="glass rounded-xl p-4 overflow-x-auto">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-semibold text-purple-300">📊 Gantt Chart</h3>
+                        {isRealtime && currentTime !== null && (
+                            <div className="flex items-center gap-2 text-green-400">
+                                <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+                                <span className="font-mono font-bold text-xl">T = {currentTime}</span>
+                            </div>
+                        )}
+                    </div>
+                    
+                    {/* 시간 축 */}
+                    <div className="relative mb-2" style={{marginLeft: '64px', height: '20px'}}>
+                        {Array.from({length: Math.ceil(maxTime/5)+1}, (_,i) => i*5).map(t => (
+                            <div key={t} className={`absolute text-xs ${isRealtime && currentTime !== null && t === Math.floor(currentTime/5)*5 ? 'text-green-400 font-bold' : 'text-gray-400'}`} style={{left: `${t * timeScale}px`, transform: 'translateX(-50%)'}}>{t}</div>
+                        ))}
+                    </div>
+
+                    {/* 차트 영역 */}
+                    <div className="relative" style={{marginLeft: '64px'}}>
+                        {/* 시간 진행 표시선 */}
+                        {isRealtime && currentTime !== null && (
+                            <div className="time-indicator" style={{left: `${currentTime * timeScale}px`, height: `${chartHeight - 40}px`}}></div>
+                        )}
+
+                        {/* 프로세스별 행 */}
+                        {uniquePids.map((pid, rowIdx) => {
+                            const pidGanttData = safeGanttData.filter(g => g.pid === pid);
+                            const isCurrentlyRunningPid = isRealtime && runningPid === pid && currentTime !== null;
+                            
+                            // 현재 실행 중인 프로세스의 진행 바 시작 시간 계산
+                            let runningBarStart = null;
+                            if (isCurrentlyRunningPid) {
+                                // 마지막 Running 엔트리의 end_time을 찾음
+                                const runningEntries = pidGanttData.filter(g => g.state !== 'Waiting');
+                                if (runningEntries.length > 0) {
+                                    runningBarStart = runningEntries[runningEntries.length - 1].end_time;
+                                } else {
+                                    // 아직 Gantt 엔트리가 없으면 프로세스 도착 시간부터
+                                    const proc = processes?.find(p => p.pid === pid);
+                                    runningBarStart = proc?.arrival_time || 0;
+                                }
+                            }
+                            
+                            return (
+                                <div key={pid} className="flex items-center mb-1" style={{marginLeft: '-64px'}}>
+                                    <div className={`w-16 text-sm font-medium ${isCurrentlyRunningPid ? 'animate-pulse' : ''}`} style={{color:getColor(pid)}}>
+                                        {isCurrentlyRunningPid ? '▶ ' : ''}P{pid}
+                                    </div>
+                                    <div className="flex-1 h-8 bg-gray-800 rounded relative">
+                                        {/* 완료된 Gantt 엔트리들 */}
+                                        {pidGanttData.map((entry, idx) => {
+                                            const isCurrent = isCurrentlyRunning(entry);
+                                            return (
+                                                <div key={idx} className={`absolute h-full rounded gantt-bar flex items-center justify-center text-xs font-bold transition-all ${isCurrent ? 'ring-2 ring-green-400 ring-offset-1 ring-offset-gray-900' : ''}`}
+                                                    style={{
+                                                        left:`${entry.start_time * timeScale}px`,
+                                                        width:`${(entry.end_time - entry.start_time) * timeScale}px`,
+                                                        backgroundColor: getColor(pid),
+                                                        opacity: entry.state === 'Waiting' ? 0.4 : 1,
+                                                        boxShadow: isCurrent ? `0 0 15px ${getColor(pid)}` : 'none'
+                                                    }}
+                                                    title={`P${pid}: ${entry.start_time}-${entry.end_time} (${entry.state})`}>
+                                                    {(entry.end_time - entry.start_time) * timeScale > 25 && (entry.state === 'Waiting' ? 'I/O' : `P${pid}`)}
+                                                </div>
+                                            );
+                                        })}
+                                        {/* 현재 실행 중인 프로세스의 진행 바 */}
+                                        {isCurrentlyRunningPid && runningBarStart !== null && currentTime > runningBarStart && (
+                                            <div className="absolute h-full rounded flex items-center justify-center text-xs font-bold animate-pulse ring-2 ring-green-400"
+                                                style={{
+                                                    left:`${runningBarStart * timeScale}px`,
+                                                    width:`${(currentTime - runningBarStart) * timeScale}px`,
+                                                    backgroundColor: getColor(pid),
+                                                    boxShadow: `0 0 20px ${getColor(pid)}`
+                                                }}
+                                                title={`P${pid}: ${runningBarStart}-${currentTime} (Running)`}>
+                                                {(currentTime - runningBarStart) * timeScale > 20 && '▶'}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+
+                        {/* Context Switch 행 */}
+                        {hasCS && (
+                            <div className="flex items-center mb-1" style={{marginLeft: '-64px'}}>
+                                <div className="w-16 text-sm font-medium text-red-400">CS</div>
+                                <div className="flex-1 h-8 bg-gray-800 rounded relative">
+                                    {safeGanttData.filter(g => g.pid === -2).map((entry, idx) => {
+                                        const isCurrent = isRealtime && currentTime !== null && entry.start_time <= currentTime && entry.end_time > currentTime;
+                                        return (
+                                            <div key={idx} className={`absolute h-full rounded gantt-bar flex items-center justify-center text-xs font-bold text-white ${isCurrent ? 'ring-2 ring-yellow-400' : ''}`}
+                                                style={{left:`${entry.start_time * timeScale}px`, width:`${(entry.end_time - entry.start_time) * timeScale}px`, backgroundColor:'#EF4444', boxShadow: isCurrent ? '0 0 15px #EF4444' : 'none'}}>
+                                                {(entry.end_time - entry.start_time) * timeScale > 20 && 'CS'}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* 범례 */}
+                    <div className="flex gap-4 mt-4 text-sm flex-wrap">
+                        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded" style={{backgroundColor:'#4ECDC4'}}></div><span>Running</span></div>
+                        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded opacity-40" style={{backgroundColor:'#4ECDC4'}}></div><span>I/O</span></div>
+                        <div className="flex items-center gap-2"><div className="w-4 h-4 rounded" style={{backgroundColor:'#EF4444'}}></div><span>Context Switch</span></div>
+                        {isRealtime && <div className="flex items-center gap-2"><div className="w-1 h-4 bg-green-400"></div><span>현재 시간</span></div>}
+                    </div>
+                </div>
+            );
+        };
+
+        // 통계 카드
+        const StatCard = ({label, value, unit='', darkMode=true}) => (
+            <div className="stat-card rounded-xl p-4 text-center">
+                <div className={`text-2xl font-bold ${darkMode ? 'text-purple-300' : 'text-purple-600'}`}>{value}{unit}</div>
+                <div className="text-xs text-gray-400 mt-1">{label}</div>
+            </div>
+        );
+
+        // 알고리즘 비교 차트 컴포넌트
+        const ComparisonChart = ({results, darkMode}) => {
+            if (!results || results.length < 2) return null;
+            
+            const metrics = [
+                {key: 'avg_waiting_time', label: '평균 대기 시간', color: '#FF6B6B'},
+                {key: 'avg_turnaround_time', label: '평균 반환 시간', color: '#4ECDC4'},
+                {key: 'avg_response_time', label: '평균 응답 시간', color: '#45B7D1'},
+                {key: 'cpu_utilization', label: 'CPU 이용률 (%)', color: '#F7DC6F'},
+                {key: 'context_switches', label: '문맥교환 횟수', color: '#BB8FCE'}
+            ];
+            
+            const [selectedMetric, setSelectedMetric] = useState('avg_waiting_time');
+            const metric = metrics.find(m => m.key === selectedMetric);
+            
+            const values = results.map(r => r.statistics?.[selectedMetric] || 0);
+            const maxValue = Math.max(...values, 1);
+            
+            return (
+                <div className="glass rounded-xl p-4 mt-4">
+                    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                        <h3 className={`text-lg font-semibold ${darkMode ? 'text-purple-300' : 'text-purple-600'}`}>📊 알고리즘 비교</h3>
+                        <select className="bg-white/5 border border-white/10 rounded-lg px-3 py-1 text-sm focus:border-purple-500 outline-none" value={selectedMetric} onChange={e => setSelectedMetric(e.target.value)}>
+                            {metrics.map(m => <option key={m.key} value={m.key} className="bg-gray-900">{m.label}</option>)}
+                        </select>
+                    </div>
+                    <div className="space-y-3">
+                        {results.map((r, idx) => {
+                            const value = r.statistics?.[selectedMetric] || 0;
+                            const percentage = (value / maxValue) * 100;
+                            return (
+                                <div key={idx} className="flex items-center gap-3">
+                                    <div className="w-24 text-sm font-medium truncate">{r.algorithm}</div>
+                                    <div className="flex-1 h-8 bg-gray-800 rounded-lg relative overflow-hidden">
+                                        <div className="h-full rounded-lg transition-all duration-500 flex items-center justify-end pr-2"
+                                            style={{width: `${percentage}%`, backgroundColor: metric.color}}>
+                                            <span className="text-xs font-bold text-white drop-shadow">{selectedMetric === 'cpu_utilization' ? value.toFixed(1) + '%' : value.toFixed(2)}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        };
+
+        // 결과 내보내기 함수
+        const exportResults = (results, format) => {
+            if (!results || results.length === 0) return;
+            
+            let content, filename, type;
+            
+            if (format === 'json') {
+                content = JSON.stringify(results, null, 2);
+                filename = 'simulation_results.json';
+                type = 'application/json';
+            } else {
+                // CSV 형식
+                const headers = ['Algorithm', 'Avg Waiting Time', 'Avg Turnaround Time', 'Avg Response Time', 'CPU Utilization', 'Context Switches'];
+                const rows = results.map(r => [
+                    r.algorithm,
+                    r.statistics?.avg_waiting_time?.toFixed(2) || '0',
+                    r.statistics?.avg_turnaround_time?.toFixed(2) || '0',
+                    r.statistics?.avg_response_time?.toFixed(2) || '0',
+                    r.statistics?.cpu_utilization?.toFixed(2) || '0',
+                    r.statistics?.context_switches || '0'
+                ]);
+                content = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+                filename = 'simulation_results.csv';
+                type = 'text/csv';
+            }
+            
+            const blob = new Blob([content], {type});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        };
+
+        // 데이터 입력 모드 선택 컴포넌트
+        const DataInputSection = ({processes, setProcesses}) => {
+            const [inputMode, setInputMode] = useState('professor'); // 'professor', 'manual', 'random'
+            const [randomCount, setRandomCount] = useState(5);
+            const [newProc, setNewProc] = useState({pid:1, arrival_time:0, priority:1, execution_pattern:'5', period:0, deadline:0});
+
+            const loadProfessorData = () => {
+                setProcesses([...PROFESSOR_DATA]);
+            };
+
+            const loadRandomData = () => {
+                setProcesses(generateRandomProcesses(randomCount));
+            };
+
+            const addProcess = () => {
+                const pattern = newProc.execution_pattern.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n));
+                if (pattern.length === 0) { alert('실행 패턴을 입력하세요.'); return; }
+                setProcesses([...processes, {...newProc, execution_pattern: pattern}]);
+                setNewProc({pid: processes.length + 2, arrival_time:0, priority:1, execution_pattern:'5', period:0, deadline:0});
+            };
+
+            const clearProcesses = () => setProcesses([]);
+
+            return (
+                <div className="glass rounded-xl p-4 mb-6">
+                    <h3 className="text-lg font-semibold mb-4 text-purple-300">📝 프로세스 데이터</h3>
+                    
+                    {/* 입력 모드 탭 */}
+                    <div className="flex gap-2 mb-4 flex-wrap">
+                        <button onClick={() => setInputMode('professor')} className={`tab-btn px-4 py-2 rounded-lg font-medium ${inputMode === 'professor' ? 'active' : 'glass hover:bg-white/10'}`}>
+                            📚 교수님 데이터
+                        </button>
+                        <button onClick={() => setInputMode('manual')} className={`tab-btn px-4 py-2 rounded-lg font-medium ${inputMode === 'manual' ? 'active' : 'glass hover:bg-white/10'}`}>
+                            ✏️ 직접 입력
+                        </button>
+                        <button onClick={() => setInputMode('random')} className={`tab-btn px-4 py-2 rounded-lg font-medium ${inputMode === 'random' ? 'active' : 'glass hover:bg-white/10'}`}>
+                            🎲 랜덤 생성
+                        </button>
+                    </div>
+
+                    {/* 교수님 데이터 모드 */}
+                    {inputMode === 'professor' && (
+                        <div className="mb-4">
+                            <p className="text-sm text-gray-400 mb-3">교수님이 제공한 7개의 테스트 프로세스 데이터입니다. (P1~P7, 실시간 프로세스 포함)</p>
+                            <button onClick={loadProfessorData} className="btn-primary px-4 py-2 rounded-lg text-white font-medium">
+                                📥 교수님 데이터 불러오기
+                            </button>
+                        </div>
+                    )}
+
+                    {/* 직접 입력 모드 */}
+                    {inputMode === 'manual' && (
+                        <div className="mb-4">
+                            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-4">
+                                <div><label className="text-xs text-gray-400 block mb-1">PID</label><input type="number" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 focus:border-purple-500 outline-none" value={newProc.pid} onChange={e => setNewProc({...newProc, pid:parseInt(e.target.value) || 1})}/></div>
+                                <div><label className="text-xs text-gray-400 block mb-1">도착 시간</label><input type="number" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 focus:border-purple-500 outline-none" value={newProc.arrival_time} onChange={e => setNewProc({...newProc, arrival_time:parseInt(e.target.value) || 0})}/></div>
+                                <div><label className="text-xs text-gray-400 block mb-1">우선순위</label><input type="number" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 focus:border-purple-500 outline-none" value={newProc.priority} onChange={e => setNewProc({...newProc, priority:parseInt(e.target.value) || 1})}/></div>
+                                <div className="col-span-2"><label className="text-xs text-gray-400 block mb-1">실행 패턴 (CPU,IO,CPU,...)</label><input type="text" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 focus:border-purple-500 outline-none" placeholder="예: 5,3,5" value={newProc.execution_pattern} onChange={e => setNewProc({...newProc, execution_pattern:e.target.value})}/></div>
+                                <div><label className="text-xs text-gray-400 block mb-1">주기 (RM)</label><input type="number" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 focus:border-purple-500 outline-none" value={newProc.period} onChange={e => setNewProc({...newProc, period:parseInt(e.target.value) || 0})}/></div>
+                                <div><label className="text-xs text-gray-400 block mb-1">마감 (EDF)</label><input type="number" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 focus:border-purple-500 outline-none" value={newProc.deadline} onChange={e => setNewProc({...newProc, deadline:parseInt(e.target.value) || 0})}/></div>
+                            </div>
+                            <button onClick={addProcess} className="btn-primary px-4 py-2 rounded-lg text-white font-medium">+ 프로세스 추가</button>
+                        </div>
+                    )}
+
+                    {/* 랜덤 생성 모드 */}
+                    {inputMode === 'random' && (
+                        <div className="mb-4">
+                            <div className="flex items-center gap-4 mb-3">
+                                <label className="text-sm text-gray-400">프로세스 개수:</label>
+                                <input type="number" min="2" max="10" className="w-20 bg-white/5 border border-white/10 rounded-lg px-3 py-2 focus:border-purple-500 outline-none" value={randomCount} onChange={e => setRandomCount(Math.min(10, Math.max(2, parseInt(e.target.value) || 5)))}/>
+                                <button onClick={loadRandomData} className="btn-primary px-4 py-2 rounded-lg text-white font-medium">
+                                    🎲 랜덤 생성
+                                </button>
+                            </div>
+                            <p className="text-xs text-gray-500">랜덤으로 프로세스를 생성합니다. (도착시간, 우선순위, CPU/IO 버스트 무작위)</p>
+                        </div>
+                    )}
+
+                    {/* 프로세스 목록 */}
+                    {processes.length > 0 && (
+                        <div>
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-sm text-gray-400">현재 {processes.length}개 프로세스</span>
+                                <button onClick={clearProcesses} className="text-red-400 text-sm hover:text-red-300">🗑️ 전체 삭제</button>
+                            </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm">
+                                    <thead><tr className="border-b border-white/10"><th className="p-2 text-left text-purple-300">PID</th><th className="p-2 text-left">도착</th><th className="p-2 text-left">우선순위</th><th className="p-2 text-left">실행 패턴</th><th className="p-2 text-left">주기</th><th className="p-2 text-left">마감</th><th></th></tr></thead>
+                                    <tbody>
+                                        {processes.map(p => (
+                                            <tr key={p.pid} className="border-b border-white/5 hover:bg-white/5">
+                                                <td className="p-2 font-bold" style={{color:COLORS[(p.pid-1)%COLORS.length]}}>P{p.pid}</td>
+                                                <td className="p-2">{p.arrival_time}</td><td className="p-2">{p.priority}</td>
+                                                <td className="p-2">{p.execution_pattern.join(', ')}</td>
+                                                <td className="p-2">{p.period||'-'}</td><td className="p-2">{p.deadline||'-'}</td>
+                                                <td className="p-2"><button onClick={() => setProcesses(processes.filter(x => x.pid !== p.pid))} className="text-red-400 hover:text-red-300">✕</button></td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // 메인 앱
+        function App() {
+            const [mode, setMode] = useState('batch');
+            const [processes, setProcesses] = useState([]);
+            const [selectedAlgos, setSelectedAlgos] = useState(['FCFS']);
+            const [csOverhead, setCsOverhead] = useState(1);
+            const [timeSlice, setTimeSlice] = useState(4);
+            const [results, setResults] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [activeTab, setActiveTab] = useState(0);
+            const [realtimeAlgo, setRealtimeAlgo] = useState('FCFS');
+            
+            // 실시간 시뮬레이션 상태
+            const [rtRunning, setRtRunning] = useState(false);
+            const [rtComplete, setRtComplete] = useState(false);
+            const [rtStats, setRtStats] = useState({current_time:0, context_switches:0, completed:0, total:0, cpu_busy_time:0});
+            const [rtGantt, setRtGantt] = useState([]);
+            const [rtLogs, setRtLogs] = useState([]);
+            const [rtProcess, setRtProcess] = useState(null);
+            const [rtReady, setRtReady] = useState([]);
+            const [rtWaiting, setRtWaiting] = useState([]);
+            const [speed, setSpeed] = useState(1);
+            const wsRef = useRef(null);
+            
+            // 다크/라이트 모드
+            const [darkMode, setDarkMode] = useState(true);
+            
+            useEffect(() => {
+                document.getElementById('app-body').className = darkMode ? 'text-gray-200' : 'text-gray-200 light-mode';
+            }, [darkMode]);
+
+            const runSimulation = async () => {
+                if (processes.length === 0) { alert('프로세스를 추가하세요.'); return; }
+                if (selectedAlgos.length === 0) { alert('알고리즘을 선택하세요.'); return; }
+                setLoading(true);
+                try {
+                    const res = await fetch(`${API_URL}/simulate`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({processes, algorithms: selectedAlgos, context_switch_overhead: csOverhead, time_slice: timeSlice})
+                    });
+                    const data = await res.json();
+                    setResults(data.results);
+                    setActiveTab(0);
+                } catch(e) { alert('시뮬레이션 실행 중 오류: ' + e.message); }
+                setLoading(false);
+            };
+
+            // 실시간 시뮬레이션
+            const initRealtime = () => {
+                if (processes.length === 0) { alert('프로세스를 추가하세요.'); return; }
+                if (wsRef.current) wsRef.current.close();
+                setRtGantt([]); setRtLogs([]); setRtComplete(false); setRtRunning(false);
+                setRtStats({current_time:0, context_switches:0, completed:0, total:processes.length, cpu_busy_time:0});
+                setRtProcess(null); setRtReady([]); setRtWaiting([]);
+                
+                const ws = new WebSocket(`ws://localhost:8000/ws/realtime`);
+                ws.onopen = () => {
+                    ws.send(JSON.stringify({action:'init', processes, algorithm:realtimeAlgo, context_switch_overhead:csOverhead, time_slice:timeSlice}));
+                };
+                ws.onmessage = (e) => {
+                    const data = JSON.parse(e.data);
+                    if (data.type === 'initialized') {
+                        setRtStats(prev => ({...prev, total: data.process_count}));
+                    } else if (data.type === 'step_result') {
+                        if (data.new_gantt) setRtGantt(prev => [...prev, ...data.new_gantt]);
+                        if (data.new_logs) setRtLogs(prev => [...prev, ...data.new_logs]);
+                        setRtStats(data.stats);
+                        setRtProcess(data.running);
+                        setRtReady(data.ready_queue || []);
+                        setRtWaiting(data.waiting_queue || []);
+                        if (data.complete) { setRtComplete(true); setRtRunning(false); }
+                    }
+                };
+                ws.onerror = () => alert('WebSocket 연결 오류');
+                wsRef.current = ws;
+            };
+
+            const playRealtime = () => { 
+                setRtRunning(true); 
+                if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({action:'run', speed})); 
+            };
+
+            const currentResult = results[activeTab];
+
+            return (
+                <div className="min-h-screen p-4 md:p-8">
+                    <div className="max-w-7xl mx-auto">
+                        <header className="text-center mb-8 relative">
+                            {/* 다크/라이트 모드 토글 */}
+                            <button onClick={() => setDarkMode(!darkMode)} className="absolute right-0 top-0 glass px-3 py-2 rounded-lg hover:bg-white/10 transition-all" title={darkMode ? '라이트 모드로 전환' : '다크 모드로 전환'}>
+                                {darkMode ? '☀️' : '🌙'}
+                            </button>
+                            <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">CPU 스케줄러 시뮬레이터</h1>
+                            <p className="text-gray-400 mt-2">운영체제 스케줄링 알고리즘 시각화 도구</p>
+                        </header>
+
+                        {/* 모드 선택 */}
+                        <div className="flex justify-center gap-4 mb-6">
+                            <button onClick={() => setMode('batch')} className={`px-6 py-3 rounded-lg font-medium transition-all ${mode==='batch' ? 'btn-primary text-white' : 'glass hover:bg-white/10'}`}>📊 일괄 시뮬레이션</button>
+                            <button onClick={() => setMode('realtime')} className={`px-6 py-3 rounded-lg font-medium transition-all ${mode==='realtime' ? 'btn-primary text-white' : 'glass hover:bg-white/10'}`}>⏱️ 실시간 시뮬레이션</button>
+                        </div>
+
+                        {/* 데이터 입력 섹션 */}
+                        <DataInputSection processes={processes} setProcesses={setProcesses} />
+
+                        {/* 설정 */}
+                        <div className="glass rounded-xl p-4 mb-6">
+                            <h3 className="text-lg font-semibold mb-4 text-purple-300">⚙️ 설정</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div><label className="text-sm text-gray-400 block mb-1">문맥교환 오버헤드</label><input type="number" min="0" max="10" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 focus:border-purple-500 outline-none" value={csOverhead} onChange={e => setCsOverhead(parseInt(e.target.value) || 0)}/><p className="text-xs text-gray-500 mt-1">0=없음, 1이상=Gantt에 CS 표시</p></div>
+                                <div><label className="text-sm text-gray-400 block mb-1">Round Robin 타임 슬라이스</label><input type="number" min="1" max="20" className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 focus:border-purple-500 outline-none" value={timeSlice} onChange={e => setTimeSlice(parseInt(e.target.value) || 4)}/></div>
+                            </div>
+                        </div>
+
+                        {mode === 'batch' ? (
+                            <>
+                                {/* 알고리즘 선택 */}
+                                <div className="glass rounded-xl p-4 mb-6">
+                                    <h3 className="text-lg font-semibold mb-4 text-purple-300">⚙️ 알고리즘 선택</h3>
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                        {ALGORITHMS.map(algo => (
+                                            <label key={algo.id} className={`flex items-center gap-2 p-3 rounded-lg cursor-pointer transition-all ${selectedAlgos.includes(algo.id) ? 'bg-purple-600/30 border border-purple-500' : 'bg-gray-800/50 border border-gray-700 hover:border-gray-600'}`}>
+                                                <input type="checkbox" className="w-4 h-4 accent-purple-500" checked={selectedAlgos.includes(algo.id)} onChange={() => setSelectedAlgos(selectedAlgos.includes(algo.id) ? selectedAlgos.filter(a => a !== algo.id) : [...selectedAlgos, algo.id])}/>
+                                                <div><div className="font-medium text-sm">{algo.id}</div><div className="text-xs text-gray-400">{algo.preemptive ? '선점형' : '비선점형'}</div></div>
+                                            </label>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div className="text-center mb-6">
+                                    <button onClick={runSimulation} disabled={loading || processes.length === 0} className="btn-primary text-lg px-8 py-3 rounded-lg text-white font-medium">{loading ? '⏳ 실행 중...' : '🚀 시뮬레이션 실행'}</button>
+                                </div>
+
+                                {/* 결과 */}
+                                {results.length > 0 && (
+                                    <div className="space-y-4">
+                                        {/* 내보내기 버튼 */}
+                                        <div className="flex justify-end gap-2">
+                                            <button onClick={() => exportResults(results, 'csv')} className="btn-secondary px-3 py-1 rounded-lg text-sm">📥 CSV 내보내기</button>
+                                            <button onClick={() => exportResults(results, 'json')} className="btn-secondary px-3 py-1 rounded-lg text-sm">📥 JSON 내보내기</button>
+                                        </div>
+                                        
+                                        {/* 알고리즘 비교 차트 */}
+                                        {results.length > 1 && <ComparisonChart results={results} darkMode={darkMode} />}
+                                        
+                                        {results.length > 1 && (
+                                            <div className="flex gap-2 overflow-x-auto pb-2">
+                                                {results.map((r, idx) => (
+                                                    <button key={idx} onClick={() => setActiveTab(idx)} className={`px-4 py-2 rounded-lg font-medium whitespace-nowrap transition-all ${activeTab === idx ? 'btn-primary text-white' : 'glass hover:bg-white/10'}`}>{r.algorithm}</button>
+                                                ))}
+                                            </div>
+                                        )}
+                                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                                            <StatCard label="평균 대기 시간" value={currentResult?.statistics?.avg_waiting_time?.toFixed(2) || '0'}/>
+                                            <StatCard label="평균 반환 시간" value={currentResult?.statistics?.avg_turnaround_time?.toFixed(2) || '0'}/>
+                                            <StatCard label="평균 응답 시간" value={currentResult?.statistics?.avg_response_time?.toFixed(2) || '0'}/>
+                                            <StatCard label="CPU 이용률" value={currentResult?.statistics?.cpu_utilization?.toFixed(1) || '0'} unit="%"/>
+                                            <StatCard label="문맥교환" value={currentResult?.statistics?.context_switches || '0'} unit="회"/>
+                                        </div>
+                                        <GanttChart ganttData={currentResult?.gantt_chart} processes={currentResult?.processes} isRealtime={false}/>
+                                        
+                                        {/* 프로세스 결과 */}
+                                        <div className="glass rounded-xl p-4">
+                                            <h3 className="text-lg font-semibold mb-4 text-purple-300">📋 프로세스 결과</h3>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-sm">
+                                                    <thead><tr className="border-b border-white/10"><th className="p-2 text-left text-purple-300">PID</th><th className="p-2">도착</th><th className="p-2">버스트</th><th className="p-2">대기</th><th className="p-2">반환</th><th className="p-2">응답</th></tr></thead>
+                                                    <tbody>
+                                                        {currentResult?.processes?.map(p => (
+                                                            <tr key={p.pid} className="border-b border-white/5"><td className="p-2 font-bold" style={{color:COLORS[(p.pid-1)%COLORS.length]}}>P{p.pid}</td><td className="p-2 text-center">{p.arrival_time}</td><td className="p-2 text-center">{p.burst_time}</td><td className="p-2 text-center">{p.waiting_time}</td><td className="p-2 text-center">{p.turnaround_time}</td><td className="p-2 text-center">{p.response_time ?? '-'}</td></tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+
+                                        {/* 이벤트 로그 */}
+                                        <div className="glass rounded-xl p-4">
+                                            <h3 className="text-lg font-semibold mb-4 text-purple-300">📝 이벤트 로그</h3>
+                                            <div className="max-h-60 overflow-y-auto space-y-1 font-mono text-xs">
+                                                {currentResult?.event_log?.map((log, idx) => {
+                                                    let cls = 'log-time';
+                                                    if (log.includes('Context Switch')) cls = 'log-cs';
+                                                    else if (log.includes('arrived') || log.includes('completed')) cls = 'log-event';
+                                                    else if (log.includes('Running') || log.includes('Terminated')) cls = 'log-process';
+                                                    return <div key={idx} className={`${cls} px-2 py-1 rounded`}>{log}</div>;
+                                                })}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <>
+                                {/* 실시간 알고리즘 선택 */}
+                                <div className="glass rounded-xl p-4 mb-6">
+                                    <h3 className="text-lg font-semibold mb-4 text-purple-300">⚙️ 알고리즘 선택</h3>
+                                    <select className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 focus:border-purple-500 outline-none" value={realtimeAlgo} onChange={e => setRealtimeAlgo(e.target.value)}>
+                                        {ALGORITHMS.map(a => <option key={a.id} value={a.id} className="bg-gray-900">{a.name}</option>)}
+                                    </select>
+                                </div>
+
+                                {/* 컨트롤 */}
+                                <div className="glass rounded-xl p-4 mb-6">
+                                    <div className="flex flex-wrap items-center gap-3">
+                                        <button onClick={initRealtime} className="btn-primary px-4 py-2 rounded-lg text-white font-medium">🔄 초기화</button>
+                                        <button onClick={playRealtime} disabled={rtRunning || rtComplete || !wsRef.current} className="btn-primary px-4 py-2 rounded-lg text-white font-medium disabled:opacity-50">▶️ 재생</button>
+                                        <div className="flex items-center gap-2 ml-auto">
+                                            <span className="text-sm text-gray-400">속도:</span>
+                                            <input type="range" min="0.5" max="5" step="0.5" value={speed} onChange={e => setSpeed(parseFloat(e.target.value))} className="w-24 accent-purple-500"/>
+                                            <span className="text-sm font-medium w-10">{speed}x</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* 상태 */}
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                                    <StatCard label="현재 시간" value={`T = ${rtStats.current_time}`}/>
+                                    <StatCard label="문맥교환" value={rtStats.context_switches} unit="회"/>
+                                    <StatCard label="CPU 이용률" value={rtStats.current_time > 0 ? ((rtStats.cpu_busy_time / rtStats.current_time) * 100).toFixed(1) : '0'} unit="%"/>
+                                    <StatCard label="완료" value={`${rtStats.completed} / ${rtStats.total}`}/>
+                                </div>
+
+                                {/* 프로세스 상태 */}
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                                    <div className="glass rounded-xl p-4">
+                                        <h4 className="font-semibold text-green-400 mb-2">🏃 Running</h4>
+                                        {rtProcess ? (
+                                            <div className="text-sm">
+                                                <div className="font-bold text-lg" style={{color:COLORS[(rtProcess.pid-1)%COLORS.length]}}>P{rtProcess.pid}</div>
+                                                <div className="text-gray-400">남은 시간: {rtProcess.remaining}</div>
+                                                <div className="text-gray-400">우선순위: {rtProcess.priority}</div>
+                                            </div>
+                                        ) : <div className="text-gray-500 italic">CPU Idle</div>}
+                                    </div>
+                                    <div className="glass rounded-xl p-4">
+                                        <h4 className="font-semibold text-yellow-400 mb-2">📋 Ready Queue ({rtReady.length})</h4>
+                                        {rtReady.length > 0 ? (
+                                            <div className="space-y-1 max-h-24 overflow-y-auto">
+                                                {rtReady.map((p,i) => <div key={i} className="text-sm" style={{color:COLORS[(p.pid-1)%COLORS.length]}}>P{p.pid} (rem={p.remaining})</div>)}
+                                            </div>
+                                        ) : <div className="text-gray-500 italic">Empty</div>}
+                                    </div>
+                                    <div className="glass rounded-xl p-4">
+                                        <h4 className="font-semibold text-blue-400 mb-2">⏳ Waiting Queue ({rtWaiting.length})</h4>
+                                        {rtWaiting.length > 0 ? (
+                                            <div className="space-y-1 max-h-24 overflow-y-auto">
+                                                {rtWaiting.map((p,i) => <div key={i} className="text-sm" style={{color:COLORS[(p.pid-1)%COLORS.length]}}>P{p.pid} (I/O)</div>)}
+                                            </div>
+                                        ) : <div className="text-gray-500 italic">Empty</div>}
+                                    </div>
+                                </div>
+
+                                {/* Gantt 차트 (시간 표시선 포함) */}
+                                <GanttChart ganttData={rtGantt} processes={processes} currentTime={rtStats.current_time} isRealtime={true} runningPid={rtProcess?.pid || null}/>
+
+                                {/* 로그 */}
+                                <div className="glass rounded-xl p-4 mt-4">
+                                    <h3 className="text-lg font-semibold mb-4 text-purple-300">📝 이벤트 로그</h3>
+                                    <div className="max-h-48 overflow-y-auto space-y-1 font-mono text-xs">
+                                        {rtLogs.map((log, idx) => {
+                                            let cls = 'log-time';
+                                            if (log.includes('Context Switch')) cls = 'log-cs';
+                                            else if (log.includes('arrived') || log.includes('completed')) cls = 'log-event';
+                                            else if (log.includes('Running') || log.includes('Terminated')) cls = 'log-process';
+                                            return <div key={idx} className={`${cls} px-2 py-1 rounded`}>{log}</div>;
+                                        })}
+                                    </div>
+                                </div>
+
+                                {/* 완료 */}
+                                {rtComplete && rtStats.final && (
+                                    <div className="glass rounded-xl p-4 mt-4 border border-green-500/50 bg-green-900/20">
+                                        <h3 className="text-lg font-semibold text-green-400 mb-4">✅ 시뮬레이션 완료!</h3>
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                            <StatCard label="평균 대기 시간" value={rtStats.final.avg_waiting_time?.toFixed(2) || '0'}/>
+                                            <StatCard label="평균 반환 시간" value={rtStats.final.avg_turnaround_time?.toFixed(2) || '0'}/>
+                                            <StatCard label="CPU 이용률" value={rtStats.final.cpu_utilization?.toFixed(1) || '0'} unit="%"/>
+                                            <StatCard label="문맥교환" value={rtStats.final.context_switches || '0'} unit="회"/>
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        )}
+
+                        <footer className="text-center text-gray-500 text-sm mt-8 pb-4">운영체제 CPU 스케줄링 시뮬레이터 v1.0</footer>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>

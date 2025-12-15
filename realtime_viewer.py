@@ -31,6 +31,8 @@ class RealtimeSimulationViewer:
         self.is_complete = False
         self.speed = 1.0  # 재생 속도 (1.0 = 1초당 1 시간 단위)
         self.current_time = 0
+        self.last_log_index = 0  # 마지막으로 표시한 로그 인덱스
+        self.last_gantt_index = 0  # 마지막으로 표시한 Gantt 엔트리 인덱스
         
         # 색상 설정
         self.process_colors = {}
@@ -459,16 +461,15 @@ class RealtimeSimulationViewer:
         if self.is_complete:
             return
         
-        # 이전 Gantt 차트 엔트리 수 저장
-        prev_gantt_count = len(self.scheduler.gantt_chart)
-        
         # 스케줄러의 단계별 실행 메서드 호출
         is_complete = self.scheduler.execute_one_step()
         
-        # 새로운 Gantt 엔트리가 추가되었으면 업데이트
-        if len(self.scheduler.gantt_chart) > prev_gantt_count:
-            new_entry = self.scheduler.gantt_chart[-1]
-            self.update_gantt_chart(new_entry)
+        # 새로운 Gantt 엔트리가 추가되었으면 모두 업데이트 (중복 방지)
+        current_gantt_count = len(self.scheduler.gantt_chart)
+        if current_gantt_count > self.last_gantt_index:
+            for i in range(self.last_gantt_index, current_gantt_count):
+                self.update_gantt_chart(self.scheduler.gantt_chart[i])
+            self.last_gantt_index = current_gantt_count
         
         # 상태 패널 업데이트
         self.update_status_panel()
@@ -476,19 +477,23 @@ class RealtimeSimulationViewer:
         # 헤더 통계 업데이트
         self.update_header_stats()
         
-        # 최신 로그 표시
-        if self.scheduler.event_log:
-            latest_log = self.scheduler.event_log[-1]
+        # 새로운 로그만 표시 (중복 방지)
+        current_log_count = len(self.scheduler.event_log)
+        if current_log_count > self.last_log_index:
+            for i in range(self.last_log_index, current_log_count):
+                log_entry = self.scheduler.event_log[i]
+                
+                # 로그 타입 판별
+                if "Context Switch" in log_entry:
+                    self.log_event(log_entry, "cs")
+                elif "arrived" in log_entry or "completed" in log_entry:
+                    self.log_event(log_entry, "event")
+                elif "Running" in log_entry or "Terminated" in log_entry:
+                    self.log_event(log_entry, "process")
+                else:
+                    self.log_event(log_entry, "time")
             
-            # 로그 타입 판별
-            if "Context Switch" in latest_log:
-                self.log_event(latest_log, "cs")
-            elif "arrived" in latest_log or "completed" in latest_log:
-                self.log_event(latest_log, "event")
-            elif "Running" in latest_log or "Terminated" in latest_log:
-                self.log_event(latest_log, "process")
-            else:
-                self.log_event(latest_log, "time")
+            self.last_log_index = current_log_count
         
         # 시뮬레이션 완료 확인
         if is_complete:

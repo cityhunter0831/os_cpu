@@ -35,8 +35,8 @@ class Visualizer:
         
         fig, ax = plt.subplots(figsize=(16, 6))
         
-        # 프로세스 ID 추출 (유일한 값만)
-        unique_pids = sorted(set(entry.pid for entry in gantt_data if entry.pid != -1))
+        # 프로세스 ID 추출 (유일한 값만) - 내림차순 정렬 (P7이 위, P1이 아래)
+        unique_pids = sorted(set(entry.pid for entry in gantt_data if entry.pid != -1), reverse=True)
         pid_to_y = {pid: idx for idx, pid in enumerate(unique_pids)}
         
         # Gantt Chart 그리기

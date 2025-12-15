@@ -22,6 +22,7 @@ from schedulers import (
     PriorityScheduler, PriorityAgingScheduler, MLQScheduler,
     RateMonotonicScheduler, EDFScheduler
 )
+from schedulers.sync_demo import SyncDemoScheduler
 import core.scheduler_base as scheduler_base
 
 app = FastAPI(
@@ -49,6 +50,7 @@ ALGORITHM_MAP = {
     'MLQ': {'class': MLQScheduler, 'params': {}},
     'RateMonotonic': {'class': RateMonotonicScheduler, 'params': {}},
     'EDF': {'class': EDFScheduler, 'params': {}},
+    'SyncDemo': {'class': SyncDemoScheduler, 'params': {'buffer_size': 3, 'rounds': 5}},
 }
 
 
@@ -191,6 +193,7 @@ async def get_algorithms():
             {"id": "MLQ", "name": "Multi-Level Queue", "preemptive": True},
             {"id": "RateMonotonic", "name": "Rate Monotonic (RM)", "preemptive": True},
             {"id": "EDF", "name": "Earliest Deadline First (EDF)", "preemptive": True},
+            {"id": "SyncDemo", "name": "Sync Demo: Producer-Consumer", "preemptive": True},
         ]
     }
 

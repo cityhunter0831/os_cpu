@@ -25,6 +25,7 @@ class SyncDemoScheduler(BaseScheduler):
         super().__init__(selected, "Sync Demo: Producer-Consumer")
         self.time_slice = 4
         self.time_used = 0
+        self.execution_start = None
         # 동기화 원시 및 교착상태 탐지
         self.sync_manager = SyncManager()
         self.sem_empty = self.sync_manager.get_semaphore('empty', buffer_size)
@@ -62,9 +63,10 @@ class SyncDemoScheduler(BaseScheduler):
             else:
                 # 블락됨
                 p.state = ProcessState.WAITING
-                self.waiting_queue.append(p)
+                if p not in self.waiting_queue:
+                    self.waiting_queue.append(p)
+                    self.log_event(f"P{p.pid} → Waiting on {sem.name}")
                 self.add_to_gantt_chart(p.pid, self.current_time, self.current_time + 1, ProcessState.WAITING)
-                self.log_event(f"P{p.pid} → Waiting on {sem.name}")
                 return False
         
         elif phase == 'WAIT_MUTEX':
@@ -76,9 +78,10 @@ class SyncDemoScheduler(BaseScheduler):
                 return False
             else:
                 p.state = ProcessState.WAITING
-                self.waiting_queue.append(p)
+                if p not in self.waiting_queue:
+                    self.waiting_queue.append(p)
+                    self.log_event(f"P{p.pid} → Waiting on mutex")
                 self.add_to_gantt_chart(p.pid, self.current_time, self.current_time + 1, ProcessState.WAITING)
-                self.log_event(f"P{p.pid} → Waiting on mutex")
                 return False
         
         elif phase == 'CRITICAL':
@@ -94,6 +97,8 @@ class SyncDemoScheduler(BaseScheduler):
                     unblocked_m.state = ProcessState.READY
                     unblocked_m.last_ready_time = self.current_time
                     setattr(unblocked_m, 'sync_phase', 'WAIT_MUTEX')
+                    if unblocked_m in self.waiting_queue:
+                        self.waiting_queue.remove(unblocked_m)
                     self.ready_queue.append(unblocked_m)
                     self.log_event(f"P{unblocked_m.pid} unblocked by mutex")
                 
@@ -104,6 +109,8 @@ class SyncDemoScheduler(BaseScheduler):
                     unblocked_s.state = ProcessState.READY
                     unblocked_s.last_ready_time = self.current_time
                     setattr(unblocked_s, 'sync_phase', 'IDLE')
+                    if unblocked_s in self.waiting_queue:
+                        self.waiting_queue.remove(unblocked_s)
                     self.ready_queue.append(unblocked_s)
                     self.log_event(f"P{unblocked_s.pid} unblocked by {sem_sig.name}")
                 
@@ -121,6 +128,96 @@ class SyncDemoScheduler(BaseScheduler):
     
     def select_next_process(self) -> Optional[Process]:
         return self.ready_queue[0] if self.ready_queue else None
+    
+    def execute_one_step(self) -> bool:
+        """한 시간 단위 실행 (실시간 뷰어용)"""
+        if self.is_simulation_complete():
+            return True
+        
+        # 1. Arrival
+        self.handle_process_arrival()
+        
+        # 2. Select
+        if self.running_process is None and self.ready_queue:
+            next_p = self.ready_queue.pop(0)
+            self.running_process = next_p
+            self.running_process.state = ProcessState.RUNNING
+            if self.running_process.start_time is None:
+                self.running_process.start_time = self.current_time
+                self.running_process.response_time = self.current_time - self.running_process.arrival_time
+            self.log_event(f"P{next_p.pid} → Running")
+            self.execution_start = self.current_time
+            self.time_used = 0
+        
+        # 3. Execute
+        if self.running_process:
+            p = self.running_process
+            
+            if self.execution_start is None:
+                self.execution_start = self.current_time
+            
+            cpu_consumed = self._process_sync_step(p)
+            
+            if cpu_consumed:
+                self.stats.cpu_busy_time += 1
+                self.time_used += 1
+            
+            # 완료 체크
+            if self._is_process_done(p):
+                if self.execution_start is not None:
+                    self.add_to_gantt_chart(p.pid, self.execution_start, self.current_time + 1, ProcessState.RUNNING)
+                p.finish_time = self.current_time + 1
+                self.terminate_process(p)
+                self.running_process = None
+                self.execution_start = None
+                self.time_used = 0
+            # 블락 체크
+            elif p.state == ProcessState.WAITING:
+                if self.execution_start is not None:
+                    self.add_to_gantt_chart(p.pid, self.execution_start, self.current_time, ProcessState.RUNNING)
+                self.running_process = None
+                self.execution_start = None
+                self.time_used = 0
+            # 타임슬라이스 체크
+            elif self.time_used >= self.time_slice:
+                if self.execution_start is not None:
+                    self.add_to_gantt_chart(p.pid, self.execution_start, self.current_time + 1, ProcessState.RUNNING)
+                p.state = ProcessState.READY
+                p.last_ready_time = self.current_time + 1
+                self.ready_queue.append(p)
+                self.log_event(f"P{p.pid} time slice expired")
+                self.running_process = None
+                self.execution_start = None
+                self.time_used = 0
+        else:
+            self.add_to_gantt_chart(-1, self.current_time, self.current_time + 1, ProcessState.READY)
+        
+        # 교착상태 탐지 (매 10 틱마다)
+        if self.current_time % 10 == 0:
+            self.deadlock_checks += 1
+            cycle = self.sync_manager.detect_deadlock()
+            if cycle:
+                self.deadlocks_detected += 1
+                self.log_event(f"⚠️ DEADLOCK DETECTED! Cycle: {cycle}")
+                # 교착상태 회복: 가장 낮은 PID 프로세스를 강제 종료
+                victim_pid = min(cycle)
+                for p in self.processes:
+                    if p.pid == victim_pid and p.state == ProcessState.WAITING:
+                        self.log_event(f"🔧 DEADLOCK RECOVERY: Aborting P{victim_pid}")
+                        p.state = ProcessState.TERMINATED
+                        p.finish_time = self.current_time
+                        self.terminated_processes.append(p)
+                        if p in self.waiting_queue:
+                            self.waiting_queue.remove(p)
+                        break
+        
+        self.current_time += 1
+        
+        if self.current_time > 5000:
+            self.log_event("Timeout")
+            return True
+        
+        return self.is_simulation_complete()
     
     def run(self, verbose: bool = False) -> Dict:
         self.log_event(f"===== {self.name} Started =====")

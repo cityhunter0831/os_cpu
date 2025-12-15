@@ -81,6 +81,9 @@ class FCFSScheduler(BaseScheduler):
                 else:
                     self.running_process = next_process
                     self.running_process.state = ProcessState.RUNNING
+                    if self.running_process.start_time is None:
+                        self.running_process.start_time = self.current_time
+                        self.running_process.response_time = self.current_time - self.running_process.arrival_time
                     if self.previous_process is None:
                         self.log_event(f"P{next_process.pid} → Running")
                     self.previous_process = next_process
@@ -297,6 +300,9 @@ class SJFScheduler(BaseScheduler):
                 else:
                     self.running_process = next_process
                     self.running_process.state = ProcessState.RUNNING
+                    if self.running_process.start_time is None:
+                        self.running_process.start_time = self.current_time
+                        self.running_process.response_time = self.current_time - self.running_process.arrival_time
                     if self.previous_process is None:
                         self.log_event(f"P{next_process.pid} → Running")
                     self.previous_process = next_process
@@ -500,6 +506,9 @@ class RoundRobinScheduler(BaseScheduler):
                 else:
                     self.running_process = next_process
                     self.running_process.state = ProcessState.RUNNING
+                    if self.running_process.start_time is None:
+                        self.running_process.start_time = self.current_time
+                        self.running_process.response_time = self.current_time - self.running_process.arrival_time
                     if self.previous_process is None:
                         self.log_event(f"P{next_process.pid} → Running")
                     self.previous_process = next_process

@@ -145,8 +145,9 @@ class Process:
             self.priority = max(0, self.initial_priority - priority_boost)
     
     def reset_to_initial_priority(self):
-        """우선순위를 초기값으로 리셋"""
+        """우선순위를 초기값으로 리셋 (Aging도 리셋)"""
         self.priority = self.initial_priority
+        self.total_waiting_time_for_aging = 0
     
     def __repr__(self):
         return f"P{self.pid}[{self.state.value}]"

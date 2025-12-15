@@ -92,11 +92,13 @@ class PriorityScheduler(BaseScheduler):
                     self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
                     self.context_switch_target = next_process
                     self.previous_process = next_process
-                    self.current_time += 1
                     return False
                 else:
                     self.running_process = next_process
                     self.running_process.state = ProcessState.RUNNING
+                    if self.running_process.start_time is None:
+                        self.running_process.start_time = self.current_time
+                        self.running_process.response_time = self.current_time - self.running_process.arrival_time
                     if self.previous_process is None:
                         self.log_event(f"P{next_process.pid} → Running")
                     self.previous_process = next_process
@@ -303,11 +305,13 @@ class PriorityAgingScheduler(BaseScheduler):
                     self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
                     self.context_switch_target = next_process
                     self.previous_process = next_process
-                    self.current_time += 1
                     return False
                 else:
                     self.running_process = next_process
                     self.running_process.state = ProcessState.RUNNING
+                    if self.running_process.start_time is None:
+                        self.running_process.start_time = self.current_time
+                        self.running_process.response_time = self.current_time - self.running_process.arrival_time
                     if self.previous_process is None:
                         self.log_event(f"P{next_process.pid} → Running")
                     self.previous_process = next_process
@@ -567,11 +571,13 @@ class MLQScheduler(BaseScheduler):
                     self.context_switch_target = next_process
                     self.previous_process = next_process
                     self.current_time_slice = 0
-                    self.current_time += 1
                     return False
                 else:
                     self.running_process = next_process
                     self.running_process.state = ProcessState.RUNNING
+                    if self.running_process.start_time is None:
+                        self.running_process.start_time = self.current_time
+                        self.running_process.response_time = self.current_time - self.running_process.arrival_time
                     if self.previous_process is None:
                         self.log_event(f"P{next_process.pid} → Running")
                     self.previous_process = next_process
@@ -812,11 +818,13 @@ class RateMonotonicScheduler(BaseScheduler):
                     self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
                     self.context_switch_target = next_process
                     self.previous_process = next_process
-                    self.current_time += 1
                     return False
                 else:
                     self.running_process = next_process
                     self.running_process.state = ProcessState.RUNNING
+                    if self.running_process.start_time is None:
+                        self.running_process.start_time = self.current_time
+                        self.running_process.response_time = self.current_time - self.running_process.arrival_time
                     if self.previous_process is None:
                         self.log_event(f"P{next_process.pid} → Running")
                     self.previous_process = next_process
@@ -1023,11 +1031,13 @@ class EDFScheduler(BaseScheduler):
                     self.context_switch_remaining = CONTEXT_SWITCH_OVERHEAD
                     self.context_switch_target = next_process
                     self.previous_process = next_process
-                    self.current_time += 1
                     return False
                 else:
                     self.running_process = next_process
                     self.running_process.state = ProcessState.RUNNING
+                    if self.running_process.start_time is None:
+                        self.running_process.start_time = self.current_time
+                        self.running_process.response_time = self.current_time - self.running_process.arrival_time
                     if self.previous_process is None:
                         self.log_event(f"P{next_process.pid} → Running")
                     self.previous_process = next_process

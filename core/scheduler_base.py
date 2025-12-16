@@ -117,7 +117,8 @@ class BaseScheduler:
     def handle_process_arrival(self):
         """프로세스 도착 처리"""
         for process in self.processes:
-            if process.arrival_time == self.current_time:
+            if process.arrival_time == self.current_time and not process.has_arrived:
+                process.has_arrived = True
                 process.state = ProcessState.READY
                 process.last_ready_time = self.current_time
                 self.ready_queue.append(process)
@@ -167,6 +168,9 @@ class BaseScheduler:
         
         Args:
             new_process: 새로 실행할 프로세스 (None이면 CPU 유휴 상태)
+        
+        Returns:
+            문맥교환이 발생했는지 여부 (오버헤드 시간을 소비해야 하는지)
         """
         # 문맥 전환 카운팅: 실행 중인 프로세스가 변경될 때마다 카운트
         # 단, 같은 프로세스가 계속 실행되는 경우는 제외
@@ -186,8 +190,6 @@ class BaseScheduler:
                         self.current_time + CONTEXT_SWITCH_OVERHEAD,
                         ProcessState.CONTEXT_SWITCHING
                     )
-                    # 문맥교환 시간만큼 시간 증가
-                    self.current_time += CONTEXT_SWITCH_OVERHEAD
         elif self.previous_process is None and new_process is not None:
             # 첫 프로세스 시작 (문맥 전환으로 카운트하지 않음)
             pass
@@ -199,15 +201,18 @@ class BaseScheduler:
         if new_process is not None:
             self.previous_process = new_process
         
+        # running_process 설정 및 상태 업데이트
         self.running_process = new_process
         
         if new_process:
             new_process.state = ProcessState.RUNNING
             if new_process.start_time is None:
-                new_process.start_time = self.current_time
-                new_process.response_time = self.current_time - new_process.arrival_time
+                new_process.start_time = self.current_time + (CONTEXT_SWITCH_OVERHEAD if needs_context_switch else 0)
+                new_process.response_time = (self.current_time + (CONTEXT_SWITCH_OVERHEAD if needs_context_switch else 0)) - new_process.arrival_time
             
             self.log_event(f"P{new_process.pid} → Running")
+        
+        return needs_context_switch
     
     def terminate_process(self, process: Process):
         """프로세스 종료 처리"""

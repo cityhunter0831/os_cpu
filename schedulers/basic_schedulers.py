@@ -149,8 +149,16 @@ class FCFSScheduler(BaseScheduler):
                 next_process = self.select_next_process()
                 if next_process:
                     self.ready_queue.remove(next_process)
-                    self.context_switch(next_process)
+                    had_context_switch = self.context_switch(next_process)
                     execution_start = self.current_time
+                    # 문맥교환 오버헤드 시간 소비 (매 시간마다 도착/I/O 완료 체크)
+                    if had_context_switch:
+                        from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                        for _ in range(CONTEXT_SWITCH_OVERHEAD):
+                            self.current_time += 1
+                            self.handle_process_arrival()
+                            self.handle_io_completion()
+                        execution_start = self.current_time
             
             # 4. CPU 실행
             if self.running_process:
@@ -376,8 +384,16 @@ class SJFScheduler(BaseScheduler):
                 next_process = self.select_next_process()
                 if next_process:
                     self.ready_queue.remove(next_process)
-                    self.context_switch(next_process)
+                    had_context_switch = self.context_switch(next_process)
                     execution_start = self.current_time
+                    # 문맥교환 오버헤드 시간 소비 (매 시간마다 도착/I/O 완료 체크)
+                    if had_context_switch:
+                        from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                        for _ in range(CONTEXT_SWITCH_OVERHEAD):
+                            self.current_time += 1
+                            self.handle_process_arrival()
+                            self.handle_io_completion()
+                        execution_start = self.current_time
             
             # 5. CPU 실행
             if self.running_process:
@@ -587,9 +603,17 @@ class RoundRobinScheduler(BaseScheduler):
                 next_process = self.select_next_process()
                 if next_process:
                     self.ready_queue.remove(next_process)
-                    self.context_switch(next_process)
+                    had_context_switch = self.context_switch(next_process)
                     self.current_time_slice = 0
                     execution_start = self.current_time
+                    # 문맥교환 오버헤드 시간 소비 (매 시간마다 도착/I/O 완료 체크)
+                    if had_context_switch:
+                        from core.scheduler_base import CONTEXT_SWITCH_OVERHEAD
+                        for _ in range(CONTEXT_SWITCH_OVERHEAD):
+                            self.current_time += 1
+                            self.handle_process_arrival()
+                            self.handle_io_completion()
+                        execution_start = self.current_time
             
             # 5. CPU 실행
             if self.running_process:

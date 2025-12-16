@@ -46,6 +46,7 @@ class Process:
         
         # 실행 상태 추적
         self.state = ProcessState.READY
+        self.has_arrived = False  # 시스템에 도착했는지 여부
         self.current_burst_index = 0  # 현재 처리 중인 버스트 인덱스
         self.remaining_burst_time = execution_pattern[0] if execution_pattern else 0
         

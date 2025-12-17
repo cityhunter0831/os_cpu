@@ -59,9 +59,10 @@ def main():
     print(f"\n🚀 서버 시작 중... (포트: {port})")
     print(f"📂 백엔드 경로: {backend_dir}")
     
-    # 서버 시작 (백그라운드)
+    # 서버 시작 (백그라운드) - app.py 직접 실행
+    app_path = os.path.join(backend_dir, "app.py")
     process = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", str(port)],
+        [sys.executable, app_path],
         cwd=backend_dir,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

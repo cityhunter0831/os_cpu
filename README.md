@@ -24,14 +24,27 @@ pip install matplotlib numpy
 ```
 
 ### 2. 실행
+
+#### 방법 1: 데스크톱 버전 (CLI/GUI)
 ```bash
 python main.py
 ```
 
+#### 방법 2: 웹 버전 🌐 NEW!
+```bash
+# 웹 서버 의존성 설치
+pip install fastapi uvicorn websockets pydantic
+
+# 웹 서버 실행 (브라우저 자동 열림)
+python run_web.py
+```
+웹 브라우저에서 `http://localhost:8000` 접속
+
 **실행 시 모드 선택:**
 - `1`: CLI 모드 (콘솔) - 텍스트 기반 대화형 인터페이스
 - `2`: GUI 모드 (그래픽) - 마우스 클릭으로 간편한 조작 🎨
-  - **🎬 실시간 시뮬레이션**: 시간의 흐름에 따라 스케줄링 과정 시각화 ⭐ NEW!
+  - **🎬 실시간 시뮬레이션**: 시간의 흐름에 따라 스케줄링 과정 시각화
+- `웹`: **🌐 웹 버전** - 브라우저에서 실행, 설치 없이 사용 가능 ⭐ NEW!
 
 **대화형 모드**:
 1. **입력 데이터 선택**:
@@ -225,30 +238,33 @@ Earliest Deadline First (EDF)       2.00       7.50      100.00           1
 | 동기화/임계구역 | Sync Demo |
 운영체제 최종본.코드/
 ├── README.md                        # 이 파일 (통합 문서)
-├── gui.py                           # GUI 실행 프로그램 ⭐ (권장)
 ├── main.py                          # 콘솔 실행 프로그램
-├── realtime_viewer.py               # 실시간 시뮬레이션 뷰어 🎬 NEW!
+├── gui.py                           # GUI 실행 프로그램 
+├── run_web.py                       # 웹 서버 실행 
+├── realtime_viewer.py               # 실시간 시뮬레이션 뷰어 
 ├── requirements.txt
 ├── core/
 │   ├── process.py                   # 프로세스 클래스 (PCB)
 │   ├── scheduler_base.py            # 스케줄러 기본 클래스 (문맥교환 오버헤드 추가)
-│   └── sync.py                      # 세마포어/뮤텍스/교착상태 탐지 ⭐
+│   └── sync.py                      # 세마포어/뮤텍스/교착상태 탐지 
 ├── schedulers/
 │   ├── basic_schedulers.py          # FCFS, SJF, RR (단계별 실행 지원)
 │   ├── advanced_schedulers.py       # Priority, MLQ, RM, EDF
-│   └── sync_demo.py                 # 생산자-소비자 시뮬레이션 ⭐
+│   └── sync_demo.py                 # 생산자-소비자 시뮬레이션 
 ├── utils/
 │   ├── input_parser.py              # 파일 파싱
 │   └── visualization.py             # Gantt Chart 생성
-├── scripts/
-│   └── report_generator.py          # 결과 보고서 생성기
 ├── data/
 │   └── professor_data.txt           # 교수님 데이터
-└── simulation_results/              # 시뮬레이션 결과 (자동 생성) ⭐
+├── web/                             # 웹 버전 
+│   ├── index.html                   # 프론트엔드 (단일 HTML)
+│   └── backend/
+│       ├── app.py                   # FastAPI 백엔드 서버
+│       └── requirements.txt         # 웹 서버 의존성
+└── simulation_results/              # 시뮬레이션 결과 (자동 생성) 
     ├── gantt_*.png                  # 9개 Gantt 차트
     ├── comparison.png               # 성능 비교 그래프
-    ├── results.txt                  # 상세 통계
-    └── OS_Scheduler_Report.docx     # Word 보고서
+    └── results.txt                  # 상세 통계
 ```
 
 ---
@@ -281,8 +297,8 @@ Earliest Deadline First (EDF)       2.00       7.50      100.00           1
 
 ## 주요 기능
 
-### 필수 기능 ✅
-- ✅ **8가지 CPU 스케줄링 알고리즘**
+### 필수 기능 
+- **8가지 CPU 스케줄링 알고리즘**
   - FCFS (비선점)
   - SJF - **선점형 (SRTF)** 구현
   - Round Robin - **기본 타임 슬라이스 = 4**
@@ -291,76 +307,76 @@ Earliest Deadline First (EDF)       2.00       7.50      100.00           1
   - Rate Monotonic (RM)
   - Earliest Deadline First (EDF)
 
-- ✅ **프로세스 상태 관리 (PCB)**
+- **프로세스 상태 관리 (PCB)**
   - Ready, Running, Waiting, Terminated
   - 상태 전이 정확히 구현
 
-- ✅ **인터럽트 처리**
+- **인터럽트 처리**
   - **타이머 인터럽트**: RR에서 타임 슬라이스 만료 시
   - **I/O 인터럽트**: I/O 요청 및 완료 시
   - **선점 인터럽트**: 우선순위 높은 프로세스 도착 시
 
-- ✅ **I/O 작업 완벽 지원**
+- **I/O 작업 완벽 지원**
   - CPU 버스트와 I/O 버스트 교대 실행
   - I/O 완료 큐 관리
   - Waiting 상태 전이
 
-- ✅ **Gantt Chart 시각화**
+- **Gantt Chart 시각화**
   - Running/Waiting 상태 구분 표시
   - 각 알고리즘별 차트 자동 생성
 
-- ✅ **성능 지표 자동 계산**
+- **성능 지표 자동 계산**
   - 평균 대기 시간 = (반환 시간 - 총 버스트 시간)의 평균
   - 평균 반환 시간 = (완료 시간 - 도착 시간)의 평균
   - CPU 이용률 = (CPU 실행 시간 / 총 시뮬레이션 시간) × 100%
   - 문맥 전환 횟수 = 프로세스 변경 시에만 카운트
 
-### 선택 과제 ✅
+### 선택 과제 
 **동기화, 임계 구역, 교착상태 처리 완벽 구현:**
 
-#### 1. **뮤텍스/세마포어 임계구역 관리** ✅
+#### 1. **뮤텍스/세마포어 임계구역 관리** 
 - `Mutex` 클래스: 상호 배제 보장
 - `Semaphore` 클래스: 카운팅 세마포어 (empty/full)
 - 임계구역 진입 시 lock 획득, 퇴출 시 unlock
 - 위치: `core/sync.py`
 
-#### 2. **생산자-소비자 문제 시뮬레이션** ✅
+#### 2. **생산자-소비자 문제 시뮬레이션** 
 - 유한 버퍼 (기본 크기: 3)
 - 생산자: `empty` 세마포어 대기 → mutex 획득 → 생산 → mutex 해제 → `full` 시그널
 - 소비자: `full` 세마포어 대기 → mutex 획득 → 소비 → mutex 해제 → `empty` 시그널
 - 위치: `schedulers/sync_demo.py`
 
-#### 3. **프로세스 상태 전이 (Waiting ↔ Ready)** ✅
+#### 3. **프로세스 상태 전이 (Waiting ↔ Ready)** 
 - **Lock 획득 실패 시**: `ProcessState.WAITING`으로 변경
 - **Lock 해제 시**: 대기 중인 프로세스를 `ProcessState.READY`로 전환
 - 스케줄러는 Waiting 프로세스를 건너뛰고 Ready 큐의 다음 프로세스 실행
 - 로그 출력: `P{pid} → Waiting on {resource}`
 
-#### 4. **교착상태 탐지 및 회복** ✅
+#### 4. **교착상태 탐지 및 회복** 
 - **탐지 방법**: Wait-For Graph (WFG) 기반 사이클 탐지
 - **탐지 주기**: 매 10 시간 단위마다 자동 검사
 - **회복 전략**: 교착상태 발견 시 가장 낮은 PID 프로세스 강제 종료 (Abort)
 - **통계 출력**: 교착상태 검사 횟수 및 탐지 횟수
 - 위치: `core/sync.py` (SyncManager.detect_deadlock)
 
-#### 5. **동기화 오버헤드 측정** ✅
+#### 5. **동기화 오버헤드 측정** 
 - 임계구역 진입/퇴출 시간 추적
 - Waiting 상태 시간 측정
 - Gantt Chart에 Waiting 상태 시각화
 
 ### 추가 기능
-- ✅ **실시간 로그 출력** 📝
+- **실시간 로그 출력** 
   - 프로세스 상태 변화 실시간 추적 (생성, 실행, 대기, 종료)
   - 문맥 전환 이벤트 로그
   - 시간별 상태 전이 기록
   - CLI/GUI 모두 지원
-- ✅ **GUI 인터페이스** (Tkinter 기반) 🎨
+- **GUI 인터페이스** (Tkinter 기반) 
   - 그래픽 사용자 인터페이스
   - 실시간 로그 창
   - 마우스 클릭으로 간편한 조작
-- ✅ 대화형 콘솔 인터페이스 (한국어)
-- ✅ all 실행 시 자동 Sync Demo 프롬프트
-- ✅ 결과 자동 저장 (PNG, TXT)
+- **대화형 콘솔 인터페이스** (한국어)
+- **all 실행 시 자동 Sync Demo 프롬프트**
+- **결과 자동 저장** (PNG, TXT)
 
 ---
 
@@ -376,15 +392,16 @@ $ python main.py
 실행 모드를 선택하세요:
   1. CLI 모드 (콘솔)
   2. GUI 모드 (그래픽 인터페이스)
+  웹. 웹 버전 (브라우저에서 실행)
 
-선택 (1 또는 2): 2
+선택 (1 또는 2 또는 웹): 2
 
 GUI 모드를 시작합니다...
 ```
 
 ### CLI 모드 (1 선택 시)
 ```bash
-선택 (1 또는 2): 1
+선택 (1 또는 2 또는 웹): 1
 
 CLI 모드를 시작합니다...
 
@@ -527,3 +544,8 @@ python main.py
   - 재생/일시정지/단계 실행/속도 조절 (0.1x-5.0x)
   - 실시간 Gantt 차트 및 프로세스 상태 표시
   - Gantt 차트 PNG 저장 기능
+- ✅ **웹 버전** ⭐ NEW!
+  - 브라우저에서 바로 실행 (설치 불필요)
+  - FastAPI + WebSocket 기반 실시간 통신
+  - 반응형 UI (모바일 지원)
+  - `python run_web.py`로 실행
